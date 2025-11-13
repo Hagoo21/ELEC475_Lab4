@@ -4,25 +4,62 @@
 # ELEC 475 Lab 4 - Section 2.1 Dataset Preparation (MS COCO)
 # Goal: Prepare the COCO 2014 dataset for CLIP fine-tuning.
 
-Generate a Python script using PyTorch that:
-1. Loads the COCO 2014 dataset:
-   - train2014/ and val2014/ image folders
-   - captions_train2014.json and captions_val2014.json
-2. Implements preprocessing for both modalities:
-   - Resize all images to 224x224
-   - Normalize using CLIP mean=[0.48145466, 0.4578275, 0.40821073] and std=[0.26862954, 0.26130258, 0.27577711]
-3. Uses the pretrained CLIP text encoder ("openai/clip-vit-base-patch32" from HuggingFace) to encode captions.
-4. Creates a PyTorch dataset class that returns:
-   - normalized image tensor
-   - text embedding (from cached .pt files)
-   - image_id
-5. Adds functionality to cache all text embeddings into `train_text_embeds.pt` and `val_text_embeds.pt`
-6. Displays a few random image-caption pairs to verify dataset integrity.
+Generate a complete Python script using PyTorch and FiftyOne that:
 
-After generating the code, include short documentation comments explaining:
-- Dataset split sizes used (full or subset)
-- Image preprocessing pipeline
-- Text preprocessing (tokenization, max length, padding)
+### 1. Downloads and loads a subset of the COCO 2014 dataset using FiftyOne:
+   - Use: `foz.load_zoo_dataset("coco-2014", split="train", label_types=["captions"])`
+   - After loading, randomly sample **exactly 2000 images** from the training split.
+   - Do the same for the validation split: load val split and sample exactly 2000 images.
+   - Export each sampled split to a local folder with this structure:
+        data/coco_subset/train/images/
+        data/coco_subset/train/captions.json
+        data/coco_subset/val/images/
+        data/coco_subset/val/captions.json
+   - Ensure `captions.json` follows the COCO caption format (image_id, caption list, etc.)
+
+### 2. Implement CLIP-style image preprocessing:
+   - Resize all images to 224x224
+   - Normalize using CLIP's statistics:
+       mean=[0.48145466, 0.4578275, 0.40821073]
+       std=[0.26862954, 0.26130258, 0.27577711]
+
+### 3. Use the pretrained CLIP text encoder:
+   - Load "openai/clip-vit-base-patch32" via HuggingFace
+   - Tokenize captions (document max_length, truncation, and padding strategy)
+   - Encode captions and save embeddings
+
+### 4. Implement a PyTorch dataset class that returns:
+   - normalized image tensor
+   - precomputed text embedding (loaded from cache)
+   - image_id
+
+### 5. Add caching functionality:
+   - Save training caption embeddings to: `train_text_embeds.pt`
+   - Save validation caption embeddings to: `val_text_embeds.pt`
+   - Ensure that on subsequent runs, embeddings are loaded from cache instead of recomputed.
+
+### 6. Verification:
+   - Randomly pick 5 samples
+   - Display both the image and its raw caption (pre-tokenization)
+   - Print tensor shapes for image tensors and text embedding tensors
+
+### 7. Documentation (as code comments):
+   - Exact dataset split sizes (2000 train, 2000 val)
+   - Full image preprocessing pipeline (resize → normalize)
+   - Text preprocessing method:
+       - tokenizer used
+       - max_length
+       - truncation strategy
+       - padding method
+   - Explanation of why caching text embeddings improves speed and reduces GPU memory usage.
+
+### Requirements:
+   - Use torchvision, PyTorch, HuggingFace Transformers, and FiftyOne
+   - Include a main() function that prepares the dataset end-to-end
+   - Ensure deterministic sampling with a fixed random seed
+
+Generate the full script with imports, helper utilities, and a runnable main() block.
+
 
 
 # ELEC 475 Lab 4 - Section 2.2 Model Design (CLIP)

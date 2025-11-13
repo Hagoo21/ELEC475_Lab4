@@ -1,0 +1,128 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# PyCharm
+.idea/
+
+# VSCode
+.vscode/
+
+# Dataset files (large)
+datasets/coco_subset/
+datasets/cache/
+datasets/coco_annotations_cache/
+datasets/eda_results/
+datasets/verification_samples.png
+
+# Model checkpoints and weights
+models/*.pth
+models/*.pt
+models/checkpoints/
+*.ckpt
+*.safetensors
+
+# Training outputs
+train/logs/
+train/runs/
+train/checkpoints/
+train/outputs/
+
+# Analysis outputs
+analysis/results/
+analysis/plots/
+analysis/figures/
+*.png
+*.jpg
+*.jpeg
+*.gif
+!README_*.png
+
+# Large data files
+*.pt
+*.pth
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.npy
+*.npz
+
+# Logs
+*.log
+logs/
+tensorboard/
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# FiftyOne
+.fiftyone/
+fiftyone.db
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Environment variables
+.env
+.env.local
+
+# Weights & Biases
+wandb/
+
+# MLflow
+mlruns/
+
+# Data (if you add other datasets)
+data/
+*.zip
+*.tar.gz
+*.tar
+

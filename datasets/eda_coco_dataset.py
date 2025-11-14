@@ -6,6 +6,7 @@ including statistics, visualizations, and data quality checks.
 """
 
 import os
+import sys
 import json
 import torch
 import numpy as np
@@ -15,6 +16,10 @@ from collections import Counter
 import seaborn as sns
 from pathlib import Path
 
+# Import global configuration
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import config
+
 # Set style for better-looking plots
 sns.set_style("whitegrid")
 plt.rcParams['figure.figsize'] = (12, 8)
@@ -22,27 +27,18 @@ plt.rcParams['figure.figsize'] = (12, 8)
 # Get script directory
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Paths
-TRAIN_IMAGES_DIR = os.path.join(SCRIPT_DIR, 'coco_subset', 'train', 'images')
-VAL_IMAGES_DIR = os.path.join(SCRIPT_DIR, 'coco_subset', 'val', 'images')
-TRAIN_CAPTIONS_PATH = os.path.join(SCRIPT_DIR, 'coco_subset', 'train', 'captions.json')
-VAL_CAPTIONS_PATH = os.path.join(SCRIPT_DIR, 'coco_subset', 'val', 'captions.json')
-TRAIN_EMBEDS_PATH = os.path.join(SCRIPT_DIR, 'cache', 'train_text_embeds.pt')
-VAL_EMBEDS_PATH = os.path.join(SCRIPT_DIR, 'cache', 'val_text_embeds.pt')
-
-# Output directory for EDA results
-EDA_OUTPUT_DIR = os.path.join(SCRIPT_DIR, 'eda_results')
-os.makedirs(EDA_OUTPUT_DIR, exist_ok=True)
+# Create output directory
+os.makedirs(config.EDA_OUTPUT_DIR, exist_ok=True)
 
 
 def load_data(split='train'):
     """Load captions and embeddings for a given split."""
     if split == 'train':
-        captions_path = TRAIN_CAPTIONS_PATH
-        embeds_path = TRAIN_EMBEDS_PATH
+        captions_path = config.TRAIN_CAPTIONS_PATH
+        embeds_path = config.TRAIN_EMBEDDINGS_PATH
     else:
-        captions_path = VAL_CAPTIONS_PATH
-        embeds_path = VAL_EMBEDS_PATH
+        captions_path = config.VAL_CAPTIONS_PATH
+        embeds_path = config.VAL_EMBEDDINGS_PATH
     
     # Load captions
     with open(captions_path, 'r') as f:
@@ -129,7 +125,7 @@ def analyze_image_properties(data, split='train'):
     axes[1, 1].legend()
     
     plt.tight_layout()
-    plt.savefig(os.path.join(EDA_OUTPUT_DIR, f'{split}_image_properties.png'), dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(config.EDA_OUTPUT_DIR, f'{split}_image_properties.png'), dpi=config.EDA_FIGURE_DPI, bbox_inches='tight')
     print(f"✓ Saved image properties plot to eda_results/{split}_image_properties.png")
     plt.close()
 
@@ -206,7 +202,7 @@ def analyze_caption_statistics(data, split='train'):
     axes[1, 1].grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(EDA_OUTPUT_DIR, f'{split}_caption_statistics.png'), dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(config.EDA_OUTPUT_DIR, f'{split}_caption_statistics.png'), dpi=150, bbox_inches='tight')
     print(f"✓ Saved caption statistics plot to eda_results/{split}_caption_statistics.png")
     plt.close()
 
@@ -275,7 +271,7 @@ def analyze_embeddings(embeddings, split='train'):
     axes[1, 1].grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(EDA_OUTPUT_DIR, f'{split}_embedding_analysis.png'), dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(config.EDA_OUTPUT_DIR, f'{split}_embedding_analysis.png'), dpi=150, bbox_inches='tight')
     print(f"✓ Saved embedding analysis plot to eda_results/{split}_embedding_analysis.png")
     plt.close()
     
@@ -293,18 +289,21 @@ def analyze_embeddings(embeddings, split='train'):
     ax.set_title('Cosine Similarity Matrix (First 100 Embeddings)')
     plt.colorbar(im, ax=ax, label='Cosine Similarity')
     plt.tight_layout()
-    plt.savefig(os.path.join(EDA_OUTPUT_DIR, f'{split}_similarity_matrix.png'), dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(config.EDA_OUTPUT_DIR, f'{split}_similarity_matrix.png'), dpi=150, bbox_inches='tight')
     print(f"✓ Saved similarity matrix to eda_results/{split}_similarity_matrix.png")
     plt.close()
 
 
-def visualize_sample_images(data, split='train', num_samples=12):
+def visualize_sample_images(data, split='train', num_samples=None):
     """Visualize random sample images with their captions."""
+    if num_samples is None:
+        num_samples = config.EDA_NUM_SAMPLES
+    
     print(f"\n{'='*70}")
     print(f"SAMPLE IMAGES - {split.upper()} SPLIT")
     print(f"{'='*70}")
     
-    images_dir = TRAIN_IMAGES_DIR if split == 'train' else VAL_IMAGES_DIR
+    images_dir = config.TRAIN_IMAGES_DIR if split == 'train' else config.VAL_IMAGES_DIR
     
     # Create caption mapping
     image_to_captions = {}
@@ -345,7 +344,7 @@ def visualize_sample_images(data, split='train', num_samples=12):
         axes[idx].set_title(f"ID: {img_id}\n{caption}", fontsize=9, wrap=True)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(EDA_OUTPUT_DIR, f'{split}_sample_images.png'), dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(config.EDA_OUTPUT_DIR, f'{split}_sample_images.png'), dpi=150, bbox_inches='tight')
     print(f"✓ Saved sample images to eda_results/{split}_sample_images.png")
     plt.close()
 
@@ -391,7 +390,7 @@ def compare_train_val():
     axes[1].legend()
     
     plt.tight_layout()
-    plt.savefig(os.path.join(EDA_OUTPUT_DIR, 'train_vs_val_comparison.png'), dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(config.EDA_OUTPUT_DIR, 'train_vs_val_comparison.png'), dpi=150, bbox_inches='tight')
     print(f"✓ Saved comparison plot to eda_results/train_vs_val_comparison.png")
     plt.close()
 
@@ -435,6 +434,7 @@ def generate_summary_report():
     
     # Embedding statistics
     train_embed_tensor = torch.stack([train_embeds[k] for k in sorted(train_embeds.keys())])
+    val_embed_tensor = torch.stack([val_embeds[k] for k in sorted(val_embeds.keys())])
     
     report.append("EMBEDDING STATISTICS")
     report.append("-" * 70)
@@ -457,7 +457,7 @@ def generate_summary_report():
     
     # Save report
     report_text = "\n".join(report)
-    report_path = os.path.join(EDA_OUTPUT_DIR, 'eda_summary_report.txt')
+    report_path = os.path.join(config.EDA_OUTPUT_DIR, 'eda_summary_report.txt')
     with open(report_path, 'w') as f:
         f.write(report_text)
     
@@ -470,21 +470,21 @@ def main():
     print("="*70)
     print("COCO-CLIP DATASET - EXPLORATORY DATA ANALYSIS")
     print("="*70)
-    print(f"Output directory: {EDA_OUTPUT_DIR}")
+    print(f"Output directory: {config.EDA_OUTPUT_DIR}")
     
     # Train split analysis
     train_data, train_embeds = analyze_basic_stats('train')
     analyze_image_properties(train_data, 'train')
     analyze_caption_statistics(train_data, 'train')
     analyze_embeddings(train_embeds, 'train')
-    visualize_sample_images(train_data, 'train', num_samples=12)
+    visualize_sample_images(train_data, 'train')
     
     # Val split analysis
     val_data, val_embeds = analyze_basic_stats('val')
     analyze_image_properties(val_data, 'val')
     analyze_caption_statistics(val_data, 'val')
     analyze_embeddings(val_embeds, 'val')
-    visualize_sample_images(val_data, 'val', num_samples=12)
+    visualize_sample_images(val_data, 'val')
     
     # Comparison
     compare_train_val()
@@ -495,9 +495,9 @@ def main():
     print(f"\n{'='*70}")
     print("✓ EDA COMPLETE!")
     print(f"{'='*70}")
-    print(f"All results saved to: {EDA_OUTPUT_DIR}")
+    print(f"All results saved to: {config.EDA_OUTPUT_DIR}")
     print("\nGenerated files:")
-    for file in sorted(os.listdir(EDA_OUTPUT_DIR)):
+    for file in sorted(os.listdir(config.EDA_OUTPUT_DIR)):
         print(f"  - {file}")
 
 

@@ -35,6 +35,7 @@ Caching Strategy:
 """
 
 import os
+import sys
 import json
 import random
 from pathlib import Path
@@ -52,33 +53,18 @@ from transformers import CLIPTokenizer, CLIPTextModel
 
 import matplotlib.pyplot as plt
 
+# Import global configuration
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import config
 
 # Set random seeds for reproducibility
-RANDOM_SEED = 42
-random.seed(RANDOM_SEED)
-np.random.seed(RANDOM_SEED)
-torch.manual_seed(RANDOM_SEED)
+random.seed(config.RANDOM_SEED)
+np.random.seed(config.RANDOM_SEED)
+torch.manual_seed(config.RANDOM_SEED)
 
 
 # Get the directory where this script is located (datasets folder)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Dataset configuration - using absolute paths based on script location
-DATASET_CONFIG = {
-    'train_samples': 2000,
-    'val_samples': 2000,
-    'data_dir': os.path.join(SCRIPT_DIR, 'coco_subset'),
-    'cache_dir': os.path.join(SCRIPT_DIR, 'cache'),
-}
-
-# CLIP preprocessing constants
-CLIP_IMAGE_SIZE = 224
-CLIP_MEAN = [0.48145466, 0.4578275, 0.40821073]
-CLIP_STD = [0.26862954, 0.26130258, 0.27577711]
-
-# CLIP text encoder configuration
-CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
-CLIP_MAX_LENGTH = 77  # CLIP's context length
 
 
 def _download_coco_captions(split: str) -> str:
@@ -107,7 +93,7 @@ def _download_coco_captions(split: str) -> str:
     }
     
     # Create cache directory
-    cache_dir = os.path.join(SCRIPT_DIR, 'coco_annotations_cache')
+    cache_dir = config.ANNOTATIONS_CACHE_DIR
     os.makedirs(cache_dir, exist_ok=True)
     
     annotation_file = annotation_files[split]
@@ -183,11 +169,11 @@ def download_and_sample_coco(
     # This avoids downloading the full ~13GB train or ~6GB val dataset
     # Note: We don't specify label_types because COCO 2014 doesn't support "captions" type in FiftyOne
     dataset = foz.load_zoo_dataset(
-        "coco-2014",
+        config.COCO_DATASET_NAME,
         split=fiftyone_split,
         max_samples=num_samples,
         shuffle=True,
-        seed=RANDOM_SEED,
+        seed=config.RANDOM_SEED,
         dataset_name=f"coco-2014-{split}-temp"
     )
     
@@ -305,9 +291,9 @@ def load_captions_from_json(captions_path: str) -> Dict[int, List[str]]:
 def precompute_text_embeddings(
     captions_path: str,
     cache_path: str,
-    model_name: str = CLIP_MODEL_NAME,
-    max_length: int = CLIP_MAX_LENGTH,
-    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model_name: str = None,
+    max_length: int = None,
+    device: str = None
 ) -> Dict[int, torch.Tensor]:
     """
     Precompute and cache CLIP text embeddings for all captions.
@@ -315,13 +301,21 @@ def precompute_text_embeddings(
     Args:
         captions_path: Path to captions.json
         cache_path: Path to save cached embeddings
-        model_name: HuggingFace CLIP model name
-        max_length: Maximum sequence length for tokenization
-        device: Device to run model on
+        model_name: HuggingFace CLIP model name (defaults to config value)
+        max_length: Maximum sequence length for tokenization (defaults to config value)
+        device: Device to run model on (defaults to config value or auto-detect)
         
     Returns:
         Dictionary mapping image_id to text embedding tensor
     """
+    # Use config defaults if not specified
+    if model_name is None:
+        model_name = config.CLIP_MODEL_NAME
+    if max_length is None:
+        max_length = config.CLIP_MAX_LENGTH
+    if device is None:
+        device = config.DEVICE if torch.cuda.is_available() else 'cpu'
+    
     # Check if cache exists
     if os.path.exists(cache_path):
         print(f"Loading cached text embeddings from {cache_path}")
@@ -438,9 +432,9 @@ class COCOCLIPDataset(Dataset):
             3. Normalize with CLIP statistics
         """
         return transforms.Compose([
-            transforms.Resize((CLIP_IMAGE_SIZE, CLIP_IMAGE_SIZE)),
+            transforms.Resize((config.CLIP_IMAGE_SIZE, config.CLIP_IMAGE_SIZE)),
             transforms.ToTensor(),
-            transforms.Normalize(mean=CLIP_MEAN, std=CLIP_STD)
+            transforms.Normalize(mean=config.CLIP_MEAN, std=config.CLIP_STD)
         ])
     
     def __len__(self):
@@ -502,8 +496,8 @@ def verify_dataset(dataset: COCOCLIPDataset, num_samples: int = 5):
         raw_caption = dataset.get_raw_caption(image_id)
         
         # Denormalize image for display
-        mean = torch.tensor(CLIP_MEAN).view(3, 1, 1)
-        std = torch.tensor(CLIP_STD).view(3, 1, 1)
+        mean = torch.tensor(config.CLIP_MEAN).view(3, 1, 1)
+        std = torch.tensor(config.CLIP_STD).view(3, 1, 1)
         image_denorm = image_tensor * std + mean
         image_denorm = torch.clamp(image_denorm, 0, 1)
         
@@ -552,52 +546,42 @@ def main():
     print("="*60)
     print(f"Script location: {SCRIPT_DIR}")
     print(f"\nConfiguration:")
-    print(f"  Train samples: {DATASET_CONFIG['train_samples']}")
-    print(f"  Val samples: {DATASET_CONFIG['val_samples']}")
-    print(f"  Output directory: {DATASET_CONFIG['data_dir']}")
-    print(f"  Cache directory: {DATASET_CONFIG['cache_dir']}")
-    print(f"  Random seed: {RANDOM_SEED}")
-    
-    data_dir = DATASET_CONFIG['data_dir']
-    cache_dir = DATASET_CONFIG['cache_dir']
+    print(f"  Train samples: {config.TRAIN_SAMPLES}")
+    print(f"  Val samples: {config.VAL_SAMPLES}")
+    print(f"  Output directory: {config.DATA_DIR}")
+    print(f"  Cache directory: {config.CACHE_DIR}")
+    print(f"  Random seed: {config.RANDOM_SEED}")
+    print(f"  CLIP model: {config.CLIP_MODEL_NAME}")
     
     # Step 1: Download and sample COCO dataset
     # Check if data already exists
-    train_images_dir = os.path.join(data_dir, 'train', 'images')
-    val_images_dir = os.path.join(data_dir, 'val', 'images')
-    train_captions_path = os.path.join(data_dir, 'train', 'captions.json')
-    val_captions_path = os.path.join(data_dir, 'val', 'captions.json')
-    
-    if not os.path.exists(train_captions_path):
+    if not os.path.exists(config.TRAIN_CAPTIONS_PATH):
         download_and_sample_coco(
             'train',
-            DATASET_CONFIG['train_samples'],
-            data_dir
+            config.TRAIN_SAMPLES,
+            config.DATA_DIR
         )
     else:
-        print(f"\n✓ Train split already exists at {train_images_dir}")
+        print(f"\n✓ Train split already exists at {config.TRAIN_IMAGES_DIR}")
     
-    if not os.path.exists(val_captions_path):
+    if not os.path.exists(config.VAL_CAPTIONS_PATH):
         download_and_sample_coco(
             'val',
-            DATASET_CONFIG['val_samples'],
-            data_dir
+            config.VAL_SAMPLES,
+            config.DATA_DIR
         )
     else:
-        print(f"✓ Val split already exists at {val_images_dir}")
+        print(f"✓ Val split already exists at {config.VAL_IMAGES_DIR}")
     
     # Step 2 & 3: Precompute text embeddings with caching
-    train_cache_path = os.path.join(cache_dir, 'train_text_embeds.pt')
-    val_cache_path = os.path.join(cache_dir, 'val_text_embeds.pt')
-    
     train_text_embeddings = precompute_text_embeddings(
-        train_captions_path,
-        train_cache_path
+        config.TRAIN_CAPTIONS_PATH,
+        config.TRAIN_EMBEDDINGS_PATH
     )
     
     val_text_embeddings = precompute_text_embeddings(
-        val_captions_path,
-        val_cache_path
+        config.VAL_CAPTIONS_PATH,
+        config.VAL_EMBEDDINGS_PATH
     )
     
     # Step 4: Create PyTorch datasets
@@ -606,14 +590,14 @@ def main():
     print(f"{'='*60}")
     
     train_dataset = COCOCLIPDataset(
-        train_images_dir,
-        train_captions_path,
+        config.TRAIN_IMAGES_DIR,
+        config.TRAIN_CAPTIONS_PATH,
         train_text_embeddings
     )
     
     val_dataset = COCOCLIPDataset(
-        val_images_dir,
-        val_captions_path,
+        config.VAL_IMAGES_DIR,
+        config.VAL_CAPTIONS_PATH,
         val_text_embeddings
     )
     
@@ -630,16 +614,16 @@ def main():
     
     train_loader = DataLoader(
         train_dataset,
-        batch_size=32,
+        batch_size=config.BATCH_SIZE,
         shuffle=True,
-        num_workers=0  # Set to 0 for Windows compatibility
+        num_workers=config.NUM_WORKERS
     )
     
     val_loader = DataLoader(
         val_dataset,
-        batch_size=32,
+        batch_size=config.BATCH_SIZE,
         shuffle=False,
-        num_workers=0
+        num_workers=config.NUM_WORKERS
     )
     
     print(f"✓ Train loader: {len(train_loader)} batches")
@@ -661,8 +645,8 @@ def main():
     print("  2. Create train/val datasets with cached embeddings")
     print("  3. Use with PyTorch DataLoader for training")
     print(f"\nCache files:")
-    print(f"  - {train_cache_path}")
-    print(f"  - {val_cache_path}")
+    print(f"  - {config.TRAIN_EMBEDDINGS_PATH}")
+    print(f"  - {config.VAL_EMBEDDINGS_PATH}")
 
 
 if __name__ == "__main__":

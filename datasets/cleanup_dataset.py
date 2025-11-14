@@ -5,7 +5,7 @@ This script removes downloaded images, captions, and cached embeddings.
 Run this before re-downloading with different TRAIN_SAMPLES or VAL_SAMPLES settings.
 
 Usage:
-    python cleanup_dataset.py [options]
+    python datasets/cleanup_dataset.py [options]
 
 Options:
     --all           Delete everything including annotation cache
@@ -16,9 +16,13 @@ Options:
 """
 
 import os
+import sys
 import shutil
 import argparse
 from pathlib import Path
+
+# Add parent directory to path to import config
+sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
 
 # Try to import FiftyOne to get its paths
@@ -338,14 +342,14 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python cleanup_dataset.py                    # Standard cleanup (keep annotations)
-  python cleanup_dataset.py --all              # Delete everything
-  python cleanup_dataset.py --images-only      # Keep embeddings
-  python cleanup_dataset.py --cache-only       # Keep images
-  python cleanup_dataset.py --fiftyone         # Also clean FiftyOne cache
-  python cleanup_dataset.py --all --fiftyone   # Delete everything including FiftyOne
-  python cleanup_dataset.py --dry-run          # Preview without deleting
-  python cleanup_dataset.py --status           # Show current disk usage
+  python datasets/cleanup_dataset.py                    # Standard cleanup (keep annotations)
+  python datasets/cleanup_dataset.py --all              # Delete everything
+  python datasets/cleanup_dataset.py --images-only      # Keep embeddings
+  python datasets/cleanup_dataset.py --cache-only       # Keep images
+  python datasets/cleanup_dataset.py --fiftyone         # Also clean FiftyOne cache
+  python datasets/cleanup_dataset.py --all --fiftyone   # Delete everything including FiftyOne
+  python datasets/cleanup_dataset.py --dry-run          # Preview without deleting
+  python datasets/cleanup_dataset.py --status           # Show current disk usage
         """
     )
     

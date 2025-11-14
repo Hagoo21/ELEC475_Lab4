@@ -4,27 +4,46 @@ This directory contains a subset of the COCO 2014 dataset prepared for CLIP-styl
 
 ## 📊 Dataset Summary
 
+### Dataset Split Sizes
+This project uses a **subset of the COCO 2014 dataset**:
+- **Train**: 16,000 images (randomly sampled from COCO 2014 train split)
+- **Val**: 4,000 images (randomly sampled from COCO 2014 validation split)
+- **Total**: 20,000 images
+- **Sampling**: Deterministic sampling with random seed 42 for reproducibility
+
 ### Images
-- **Train**: 2,000 images from COCO 2014 train split
-- **Val**: 2,000 images from COCO 2014 validation split
-- **Total**: 4,000 images
-- **Format**: JPEG, various resolutions (resized to 224×224 during training)
+- **Format**: JPEG, various original resolutions
+- **Original Size**: Mixed (ranging from small to large images in the COCO dataset)
 
 ### Captions
 - **Per Image**: 5 captions (COCO standard)
-- **Total Captions**: 10,000 (train) + 10,000 (val) = 20,000 captions
+- **Total Captions**: 80,000 (train) + 20,000 (val) = 100,000 captions
 - **Format**: COCO JSON format with image metadata and annotations
 - **Content**: Human-written descriptions of image content
 
-### Text Embeddings
+### Image Preprocessing Pipeline
+Applied during training/inference:
+1. **Resize**: All images resized to 224 × 224 pixels
+2. **Convert to Tensor**: Scales pixel values to [0, 1]
+3. **Normalize**: Using CLIP-specific statistics
+   - **Mean**: `[0.48145466, 0.4578275, 0.40821073]` (RGB)
+   - **Std**: `[0.26862954, 0.26130258, 0.27577711]` (RGB)
+
+### Text Preprocessing Details
+- **Tokenizer**: CLIPTokenizer from `openai/clip-vit-base-patch32`
+- **Tokenization Method**: CLIP's byte-pair encoding (BPE) tokenizer
+- **Max Length**: 77 tokens (CLIP's fixed context length)
+- **Truncation Strategy**: `truncation=True` (sequences longer than 77 tokens are truncated)
+- **Padding Strategy**: `padding='max_length'` (all sequences padded to exactly 77 tokens)
+- **Return Format**: PyTorch tensors (`return_tensors='pt'`)
+
+### Text Embeddings (Precomputed)
 - **Model**: CLIP ViT-B/32 text encoder (`openai/clip-vit-base-patch32`)
 - **Dimension**: 512-dimensional vectors
-- **Preprocessing**: 
-  - Tokenization with max_length=77
-  - Truncation and padding to max_length
-  - Encoded using pretrained CLIP text encoder
+- **Encoding**: Uses the pretrained CLIP text encoder's pooler output
 - **Purpose**: Pre-computed to avoid redundant encoding during training (saves time and GPU memory)
 - **Format**: PyTorch tensors (`.pt` files)
+- **Caching Strategy**: Only the first caption per image is encoded and cached for training efficiency
 
 ## 📁 Directory Structure
 
@@ -32,15 +51,15 @@ This directory contains a subset of the COCO 2014 dataset prepared for CLIP-styl
 datasets/
 ├── coco_subset/                    # Main dataset
 │   ├── train/
-│   │   ├── images/                # 2,000 JPEG images
-│   │   └── captions.json          # Image metadata + 10,000 captions
+│   │   ├── images/                # Training JPEG images
+│   │   └── captions.json          # Image metadata + training captions
 │   └── val/
-│       ├── images/                # 2,000 JPEG images
-│       └── captions.json          # Image metadata + 10,000 captions
+│       ├── images/                # Validation JPEG images
+│       └── captions.json          # Image metadata + validation captions
 │
 ├── cache/                          # Pre-computed embeddings
-│   ├── train_text_embeds.pt      # 2,000 CLIP text embeddings (train)
-│   └── val_text_embeds.pt        # 2,000 CLIP text embeddings (val)
+│   ├── train_text_embeds.pt      # CLIP text embeddings (train)
+│   └── val_text_embeds.pt        # CLIP text embeddings (val)
 │
 ├── coco_annotations_cache/         # Full COCO caption files (for reference)
 │   ├── captions_train2014.json   # Original COCO train captions
@@ -90,17 +109,6 @@ Each `captions.json` file contains:
 - **annotations**: Array of captions (id, image_id, caption text)
 - Each `image_id` in annotations links to an `id` in images
 - Multiple captions can have the same `image_id` (5 per image)
-
-## 💾 Storage Requirements
-
-| Component | Size | Description |
-|-----------|------|-------------|
-| Train images | ~200-400 MB | 2,000 JPEG files |
-| Val images | ~200-400 MB | 2,000 JPEG files |
-| Train embeddings | ~4 MB | 2,000 × 512 float32 tensors |
-| Val embeddings | ~4 MB | 2,000 × 512 float32 tensors |
-| Caption JSON | ~10 MB | Text annotations |
-| **Total** | **~500 MB - 1 GB** | Complete dataset |
 
 ## 🚀 Usage
 
@@ -153,10 +161,11 @@ This generates comprehensive statistics and visualizations in `datasets/eda_resu
 
 ## 📝 Notes
 
-- Images are automatically resized to 224×224 with CLIP normalization during training
-- Text embeddings use only the first caption per image (remaining 4 captions available for future use)
-- Dataset is deterministically sampled with `random_seed=42` for reproducibility
-- Caption annotations cached from official COCO website (reused across runs)
+- **Image Preprocessing**: Images are automatically resized to 224×224 with CLIP normalization during training
+- **Text Processing**: Text embeddings use only the first caption per image (remaining 4 captions available for future use or data augmentation)
+- **Reproducibility**: Dataset is deterministically sampled with `random_seed=42` for reproducibility
+- **Caching**: Caption annotations cached from official COCO website (reused across runs to avoid re-downloading)
+- **Dataset Size**: Using a subset allows for faster experimentation while maintaining dataset diversity
 
 ## 🔄 Re-running Preparation
 

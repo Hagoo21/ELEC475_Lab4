@@ -73,7 +73,7 @@ Generate PyTorch code for the CLIP model structure:
 4. Freeze all parameters of the text encoder (no gradient updates).
 5. Ensure the image encoder and projection layers are trainable.
 6. Return normalized image and text embeddings (L2-normalized).
-7. Write clear comments explaining which parts are trainable and why.
+7. Write clear comments explaining which parts are trainable and why and add that to the readme in the analysis
 
 
 

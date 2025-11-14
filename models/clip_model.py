@@ -191,31 +191,42 @@ class CLIP(nn.Module):
     This asymmetric training approach is efficient and effective for CLIP fine-tuning.
     """
     
-    def __init__(self, embedding_dim=512, clip_model_name="openai/clip-vit-base-patch32"):
+    def __init__(self, embedding_dim=512, clip_model_name="openai/clip-vit-base-patch32", 
+                 use_cached_embeddings=False):
         """
         Initialize the CLIP model.
         
         Args:
             embedding_dim (int): Dimension of the shared embedding space
             clip_model_name (str): HuggingFace CLIP model name for text encoder
+            use_cached_embeddings (bool): If True, skip text encoder initialization to save memory
         """
         super(CLIP, self).__init__()
         
         # Initialize image encoder (TRAINABLE)
         self.image_encoder = CLIPImageEncoder(embedding_dim=embedding_dim)
         
-        # Initialize text encoder (FROZEN)
-        self.text_encoder = CLIPTextEncoder(model_name=clip_model_name)
-        
-        self.embedding_dim = embedding_dim
-        
-        print(f"\n{'='*70}")
-        print("CLIP MODEL INITIALIZED")
-        print(f"{'='*70}")
-        print(f"Embedding dimension: {embedding_dim}")
-        print(f"Image encoder: ResNet50 + Projection Head (TRAINABLE)")
-        print(f"Text encoder: {clip_model_name} (FROZEN)")
-        print(f"{'='*70}\n")
+        # Initialize text encoder only if not using cached embeddings
+        self.use_cached_embeddings = use_cached_embeddings
+        if use_cached_embeddings:
+            self.text_encoder = None
+            print(f"\n{'='*70}")
+            print("CLIP MODEL INITIALIZED (CACHED EMBEDDINGS MODE)")
+            print(f"{'='*70}")
+            print(f"Embedding dimension: {embedding_dim}")
+            print(f"Image encoder: ResNet50 + Projection Head (TRAINABLE)")
+            print(f"Text encoder: SKIPPED (using cached embeddings - saves GPU memory)")
+            print(f"{'='*70}\n")
+        else:
+            # Initialize text encoder (FROZEN)
+            self.text_encoder = CLIPTextEncoder(model_name=clip_model_name)
+            print(f"\n{'='*70}")
+            print("CLIP MODEL INITIALIZED")
+            print(f"{'='*70}")
+            print(f"Embedding dimension: {embedding_dim}")
+            print(f"Image encoder: ResNet50 + Projection Head (TRAINABLE)")
+            print(f"Text encoder: {clip_model_name} (FROZEN)")
+            print(f"{'='*70}\n")
     
     def encode_image(self, images):
         """
@@ -239,7 +250,12 @@ class CLIP(nn.Module):
         
         Returns:
             torch.Tensor: L2-normalized text embeddings of shape (batch_size, embedding_dim)
+        
+        Raises:
+            RuntimeError: If called when using cached embeddings (text encoder not initialized)
         """
+        if self.text_encoder is None:
+            raise RuntimeError("Text encoder not initialized. This model uses cached embeddings.")
         return self.text_encoder(input_ids, attention_mask)
     
     def forward(self, images, input_ids, attention_mask):
@@ -283,13 +299,21 @@ class CLIP(nn.Module):
         print(f"\n{'='*70}")
         print("PARAMETER SUMMARY")
         print(f"{'='*70}")
-        print(f"Trainable parameters: {trainable_params:,} ({100*trainable_params/total_params:.2f}%)")
-        print(f"Frozen parameters:    {frozen_params:,} ({100*frozen_params/total_params:.2f}%)")
+        print(f"Trainable parameters: {trainable_params:,}")
+        if total_params > 0:
+            print(f"  ({100*trainable_params/total_params:.2f}% of model parameters)")
+        if self.use_cached_embeddings:
+            print(f"Frozen parameters:    {frozen_params:,} (text encoder not loaded)")
+        else:
+            print(f"Frozen parameters:    {frozen_params:,} ({100*frozen_params/total_params:.2f}%)")
         print(f"Total parameters:     {total_params:,}")
+        if self.use_cached_embeddings:
+            print(f"\n💡 Memory saved: Text encoder (~123M parameters) not loaded")
         print(f"{'='*70}\n")
 
 
-def create_clip_model(embedding_dim=None, clip_model_name=None, device='cuda'):
+def create_clip_model(embedding_dim=None, clip_model_name=None, device='cuda', 
+                     use_cached_embeddings=False):
     """
     Factory function to create and initialize a CLIP model.
     
@@ -297,6 +321,7 @@ def create_clip_model(embedding_dim=None, clip_model_name=None, device='cuda'):
         embedding_dim (int): Embedding dimension (defaults to config.TEXT_EMBEDDING_DIM)
         clip_model_name (str): CLIP model name (defaults to config.CLIP_MODEL_NAME)
         device (str): Device to place model on ('cuda' or 'cpu')
+        use_cached_embeddings (bool): If True, skip text encoder initialization to save memory
     
     Returns:
         CLIP: Initialized CLIP model
@@ -308,7 +333,8 @@ def create_clip_model(embedding_dim=None, clip_model_name=None, device='cuda'):
         clip_model_name = config.CLIP_MODEL_NAME
     
     # Create model
-    model = CLIP(embedding_dim=embedding_dim, clip_model_name=clip_model_name)
+    model = CLIP(embedding_dim=embedding_dim, clip_model_name=clip_model_name,
+                 use_cached_embeddings=use_cached_embeddings)
     
     # Move to device
     model = model.to(device)

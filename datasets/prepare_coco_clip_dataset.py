@@ -39,6 +39,7 @@ import os
 import sys
 import json
 import random
+import zipfile
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import numpy as np
@@ -66,6 +67,63 @@ torch.manual_seed(config.RANDOM_SEED)
 
 # Get the directory where this script is located (datasets folder)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def cleanup_fiftyone_cache():
+    """
+    Clean up FiftyOne's cached downloads to fix corrupted/incomplete downloads.
+    This removes the FiftyOne database and zoo dataset cache.
+    """
+    print("\n" + "="*60)
+    print("Cleaning up FiftyOne cache to fix corrupted downloads...")
+    print("="*60)
+    
+    try:
+        # Delete any temporary datasets
+        print("Deleting temporary FiftyOne datasets...")
+        for dataset_name in fo.list_datasets():
+            if 'coco-2014' in dataset_name.lower() and 'temp' in dataset_name.lower():
+                try:
+                    fo.delete_dataset(dataset_name)
+                    print(f"  ✓ Deleted dataset: {dataset_name}")
+                except Exception as e:
+                    print(f"  ⚠ Could not delete {dataset_name}: {e}")
+        
+        # Get FiftyOne paths
+        try:
+            # Try to get the zoo dataset directory
+            if hasattr(fo.config, 'dataset_zoo_dir'):
+                zoo_dir = fo.config.dataset_zoo_dir
+            elif hasattr(fo.config, 'default_dataset_dir'):
+                zoo_dir = fo.config.default_dataset_dir
+            else:
+                # Default location
+                from pathlib import Path
+                zoo_dir = str(Path.home() / 'fiftyone')
+            
+            # Clean up COCO-specific cache
+            if os.path.exists(zoo_dir):
+                coco_cache = os.path.join(zoo_dir, 'coco-2014')
+                if os.path.exists(coco_cache):
+                    import shutil
+                    print(f"\nRemoving COCO cache at: {coco_cache}")
+                    shutil.rmtree(coco_cache)
+                    print("  ✓ Removed COCO cache")
+        except Exception as e:
+            print(f"  ⚠ Could not clean cache directory: {e}")
+            print("  You may need to manually delete the FiftyOne cache")
+            print("  Default location: ~/fiftyone or C:\\Users\\<username>\\fiftyone")
+        
+        print("\n✓ Cleanup complete. You can now retry the download.")
+        
+    except Exception as e:
+        print(f"⚠ Error during cleanup: {e}")
+        print("\nManual cleanup instructions:")
+        print("1. Delete temporary FiftyOne datasets:")
+        print("   - Run: python -c \"import fiftyone as fo; [fo.delete_dataset(d) for d in fo.list_datasets() if 'coco-2014' in d.lower()]\"")
+        print("2. Delete FiftyOne cache directory:")
+        print("   - Windows: C:\\Users\\<username>\\fiftyone")
+        print("   - Linux/Mac: ~/fiftyone")
 
 
 def _download_coco_captions(split: str) -> str:
@@ -140,7 +198,8 @@ def _download_coco_captions(split: str) -> str:
 def download_and_sample_coco(
     split: str,
     num_samples: Optional[int],
-    output_dir: str
+    output_dir: str,
+    max_retries: int = 3
 ) -> Tuple[List[str], Dict]:
     """
     Download COCO 2014 dataset, sample images, and export to local directory.
@@ -152,6 +211,7 @@ def download_and_sample_coco(
         split: Dataset split ('train' or 'val')
         num_samples: Number of images to sample (None for full dataset)
         output_dir: Directory to export images and captions
+        max_retries: Maximum number of retry attempts if download fails
         
     Returns:
         Tuple of (image_paths, captions_dict)
@@ -167,30 +227,59 @@ def download_and_sample_coco(
     # Map 'val' to 'validation' for FiftyOne
     fiftyone_split = 'validation' if split == 'val' else split
     
-    # Load COCO dataset using FiftyOne (images only, captions loaded separately)
-    # If num_samples is None, don't use max_samples to download the entire dataset
-    # Note: We don't specify label_types because COCO 2014 doesn't support "captions" type in FiftyOne
-    if num_samples is None:
-        # Download entire dataset
-        dataset = foz.load_zoo_dataset(
-            config.COCO_DATASET_NAME,
-            split=fiftyone_split,
-            shuffle=True,
-            seed=config.RANDOM_SEED,
-            dataset_name=f"coco-2014-{split}-temp"
-        )
-    else:
-        # Download subset
-        dataset = foz.load_zoo_dataset(
-            config.COCO_DATASET_NAME,
-            split=fiftyone_split,
-            max_samples=num_samples,
-            shuffle=True,
-            seed=config.RANDOM_SEED,
-            dataset_name=f"coco-2014-{split}-temp"
-        )
+    # Retry logic for handling corrupted downloads
+    for attempt in range(1, max_retries + 1):
+        try:
+            # Load COCO dataset using FiftyOne (images only, captions loaded separately)
+            # If num_samples is None, don't use max_samples to download the entire dataset
+            # Note: We don't specify label_types because COCO 2014 doesn't support "captions" type in FiftyOne
+            if num_samples is None:
+                # Download entire dataset
+                dataset = foz.load_zoo_dataset(
+                    config.COCO_DATASET_NAME,
+                    split=fiftyone_split,
+                    shuffle=True,
+                    seed=config.RANDOM_SEED,
+                    dataset_name=f"coco-2014-{split}-temp"
+                )
+            else:
+                # Download subset
+                dataset = foz.load_zoo_dataset(
+                    config.COCO_DATASET_NAME,
+                    split=fiftyone_split,
+                    max_samples=num_samples,
+                    shuffle=True,
+                    seed=config.RANDOM_SEED,
+                    dataset_name=f"coco-2014-{split}-temp"
+                )
+            
+            print(f"Downloaded {len(dataset)} images")
+            break  # Success, exit retry loop
+            
+        except (EOFError, zipfile.BadZipFile, OSError) as e:
+            if attempt < max_retries:
+                print(f"\n⚠ Download attempt {attempt} failed with error: {e}")
+                print(f"Cleaning up corrupted cache and retrying ({attempt}/{max_retries})...")
+                cleanup_fiftyone_cache()
+                print("Retrying download...\n")
+            else:
+                print(f"\n❌ Download failed after {max_retries} attempts.")
+                print(f"Error: {e}")
+                print("\nPossible solutions:")
+                print("1. Check your internet connection")
+                print("2. Ensure you have enough disk space (~20GB for full dataset)")
+                print("3. Manually clean FiftyOne cache:")
+                print("   - Windows: Delete C:\\Users\\<username>\\fiftyone")
+                print("   - Linux/Mac: Delete ~/fiftyone")
+                print("4. Try running the script again")
+                raise
+        except Exception as e:
+            # For other errors, don't retry
+            print(f"\n❌ Unexpected error during download: {e}")
+            raise
     
-    print(f"Downloaded {len(dataset)} images")
+    if 'dataset' not in locals():
+        raise RuntimeError("Failed to download dataset after all retries")
     
     # Download caption annotations separately
     print("Downloading COCO caption annotations...")
@@ -665,5 +754,20 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Prepare COCO-CLIP dataset')
+    parser.add_argument(
+        '--cleanup-cache',
+        action='store_true',
+        help='Clean up FiftyOne cache to fix corrupted downloads (then exit)'
+    )
+    args = parser.parse_args()
+    
+    if args.cleanup_cache:
+        print("Cleaning up FiftyOne cache...")
+        cleanup_fiftyone_cache()
+        print("\n✓ Cleanup complete. You can now run the script normally.")
+    else:
+        main()
 

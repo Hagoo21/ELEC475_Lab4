@@ -36,8 +36,9 @@ ANALYSIS_DIR = os.path.join(PROJECT_ROOT, 'analysis')
 # ============================================================================
 
 # Number of images to download (CHANGE THESE to download more/less data)
-TRAIN_SAMPLES = 16000  # Set to None to use full training set (not recommended)
-VAL_SAMPLES = 4000    # Set to None to use full validation set (not recommended)
+# Set to None to download the entire dataset split
+TRAIN_SAMPLES = None  # None = entire training set (~82,783 images, ~13GB), or specify a number for subset
+VAL_SAMPLES = None    # None = entire validation set (~40,504 images, ~6GB), or specify a number for subset
 
 # Random seed for reproducibility
 RANDOM_SEED = 42
@@ -166,8 +167,10 @@ def print_config():
     print("CURRENT CONFIGURATION")
     print("="*70)
     print(f"\nDATASET:")
-    print(f"  Train samples: {TRAIN_SAMPLES}")
-    print(f"  Val samples: {VAL_SAMPLES}")
+    train_str = "ALL (entire dataset)" if TRAIN_SAMPLES is None else str(TRAIN_SAMPLES)
+    val_str = "ALL (entire dataset)" if VAL_SAMPLES is None else str(VAL_SAMPLES)
+    print(f"  Train samples: {train_str}")
+    print(f"  Val samples: {val_str}")
     print(f"  Random seed: {RANDOM_SEED}")
     print(f"\nPATHS:")
     print(f"  Data directory: {DATA_DIR}")

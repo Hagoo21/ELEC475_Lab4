@@ -1,13 +1,14 @@
 """
 COCO-CLIP Dataset Preparation Script
 
-This script downloads and prepares a subset of the COCO 2014 dataset for use with CLIP-style models.
+This script downloads and prepares the COCO 2014 dataset (or a subset) for use with CLIP-style models.
 It handles dataset downloading, sampling, preprocessing, text encoding, and caching.
 
 Dataset Details:
-    - Train split: 2000 images (randomly sampled)
-    - Val split: 2000 images (randomly sampled)
+    - Train split: Configurable (set TRAIN_SAMPLES in config.py, None for entire dataset)
+    - Val split: Configurable (set VAL_SAMPLES in config.py, None for entire dataset)
     - Random seed: 42 (for reproducibility)
+    - Full dataset sizes: ~82,783 train images (~13GB), ~40,504 val images (~6GB)
 
 Image Preprocessing Pipeline:
     1. Resize to 224x224 pixels
@@ -39,7 +40,7 @@ import sys
 import json
 import random
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import numpy as np
 
 import torch
@@ -138,44 +139,56 @@ def _download_coco_captions(split: str) -> str:
 
 def download_and_sample_coco(
     split: str,
-    num_samples: int,
+    num_samples: Optional[int],
     output_dir: str
 ) -> Tuple[List[str], Dict]:
     """
     Download COCO 2014 dataset, sample images, and export to local directory.
     
-    IMPORTANT: This function uses FiftyOne's max_samples parameter to download
-    ONLY the specified number of images (not the entire dataset), making it
-    suitable for systems with limited disk space.
+    If num_samples is None, downloads the entire dataset split.
+    If num_samples is an integer, downloads only that many images.
     
     Args:
         split: Dataset split ('train' or 'val')
-        num_samples: Number of images to sample
+        num_samples: Number of images to sample (None for full dataset)
         output_dir: Directory to export images and captions
         
     Returns:
         Tuple of (image_paths, captions_dict)
     """
     print(f"\n{'='*60}")
-    print(f"Downloading and sampling COCO 2014 {split} split...")
-    print(f"Note: Only downloading {num_samples} images (not the full dataset)")
+    print(f"Downloading COCO 2014 {split} split...")
+    if num_samples is None:
+        print(f"Note: Downloading ENTIRE dataset (this may take a while and require ~13GB for train, ~6GB for val)")
+    else:
+        print(f"Note: Downloading {num_samples} images (subset of full dataset)")
     print(f"{'='*60}")
     
     # Map 'val' to 'validation' for FiftyOne
     fiftyone_split = 'validation' if split == 'val' else split
     
     # Load COCO dataset using FiftyOne (images only, captions loaded separately)
-    # IMPORTANT: max_samples parameter ensures we only download num_samples images
-    # This avoids downloading the full ~13GB train or ~6GB val dataset
+    # If num_samples is None, don't use max_samples to download the entire dataset
     # Note: We don't specify label_types because COCO 2014 doesn't support "captions" type in FiftyOne
-    dataset = foz.load_zoo_dataset(
-        config.COCO_DATASET_NAME,
-        split=fiftyone_split,
-        max_samples=num_samples,
-        shuffle=True,
-        seed=config.RANDOM_SEED,
-        dataset_name=f"coco-2014-{split}-temp"
-    )
+    if num_samples is None:
+        # Download entire dataset
+        dataset = foz.load_zoo_dataset(
+            config.COCO_DATASET_NAME,
+            split=fiftyone_split,
+            shuffle=True,
+            seed=config.RANDOM_SEED,
+            dataset_name=f"coco-2014-{split}-temp"
+        )
+    else:
+        # Download subset
+        dataset = foz.load_zoo_dataset(
+            config.COCO_DATASET_NAME,
+            split=fiftyone_split,
+            max_samples=num_samples,
+            shuffle=True,
+            seed=config.RANDOM_SEED,
+            dataset_name=f"coco-2014-{split}-temp"
+        )
     
     print(f"Downloaded {len(dataset)} images")
     
@@ -546,8 +559,10 @@ def main():
     print("="*60)
     print(f"Script location: {SCRIPT_DIR}")
     print(f"\nConfiguration:")
-    print(f"  Train samples: {config.TRAIN_SAMPLES}")
-    print(f"  Val samples: {config.VAL_SAMPLES}")
+    train_samples_str = "ALL (entire dataset)" if config.TRAIN_SAMPLES is None else str(config.TRAIN_SAMPLES)
+    val_samples_str = "ALL (entire dataset)" if config.VAL_SAMPLES is None else str(config.VAL_SAMPLES)
+    print(f"  Train samples: {train_samples_str}")
+    print(f"  Val samples: {val_samples_str}")
     print(f"  Output directory: {config.DATA_DIR}")
     print(f"  Cache directory: {config.CACHE_DIR}")
     print(f"  Random seed: {config.RANDOM_SEED}")

@@ -1,5 +1,11 @@
 # ELEC475_Lab4
 
+Pip Installs:
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+pip install fiftyone
+pip install transformers
+
+
 
 # ELEC 475 Lab 4 - Section 2.1 Dataset Preparation (MS COCO)
 # Goal: Prepare the COCO 2014 dataset for CLIP fine-tuning.

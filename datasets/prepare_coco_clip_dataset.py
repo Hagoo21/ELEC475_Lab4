@@ -47,7 +47,9 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
-from PIL import Image
+from PIL import Image, ImageFile
+# Allow loading truncated images (some COCO images may be corrupted/truncated)
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 import fiftyone as fo
 import fiftyone.zoo as foz
@@ -550,8 +552,15 @@ class COCOCLIPDataset(Dataset):
         
         # Load and transform image
         image_path = os.path.join(self.images_dir, filename)
-        image = Image.open(image_path).convert('RGB')
-        image_tensor = self.transform(image)
+        try:
+            image = Image.open(image_path).convert('RGB')
+            image_tensor = self.transform(image)
+        except (OSError, IOError) as e:
+            # If image is corrupted and can't be loaded, create a black image as fallback
+            print(f"Warning: Could not load image {filename} (ID: {image_id}): {e}")
+            # Create a black image of the expected size (224x224 for CLIP)
+            image = Image.new('RGB', (224, 224), color=(0, 0, 0))
+            image_tensor = self.transform(image)
         
         # Get precomputed text embedding
         text_embedding = self.text_embeddings[image_id]

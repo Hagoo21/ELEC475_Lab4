@@ -21,9 +21,10 @@ warnings.filterwarnings('ignore')
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 import matplotlib.pyplot as plt
 import numpy as np
+from tqdm import tqdm
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -124,7 +125,11 @@ def train_epoch(model, dataloader, criterion, optimizer, device, epoch, num_epoc
     total_loss = 0.0
     num_batches = 0
     
-    for batch_idx, (images, text_embeddings, image_ids) in enumerate(dataloader):
+    # Create progress bar for training batches
+    pbar = tqdm(dataloader, desc=f"Epoch {epoch}/{num_epochs} [Train]", 
+                leave=False, ncols=100)
+    
+    for batch_idx, (images, text_embeddings, image_ids) in enumerate(pbar):
         try:
             # Move data to device
             images = images.to(device)
@@ -153,22 +158,38 @@ def train_epoch(model, dataloader, criterion, optimizer, device, epoch, num_epoc
             total_loss += loss.item()
             num_batches += 1
             
-            # Log progress
-            if (batch_idx + 1) % 10 == 0:
-                print(f"  Batch [{batch_idx+1}/{len(dataloader)}] | Loss: {loss.item():.4f} | τ: {criterion.temperature.item():.4f}")
+            # Update progress bar with current loss and temperature
+            current_loss = loss.item()
+            current_temp = criterion.temperature.item()
+            pbar.set_postfix({
+                'Loss': f'{current_loss:.4f}',
+                'τ': f'{current_temp:.4f}',
+                'Avg': f'{total_loss/num_batches:.4f}'
+            })
         
         except RuntimeError as e:
-            if "out of memory" in str(e):
-                print(f"\n⚠ GPU out of memory at batch {batch_idx}. Skipping batch...")
+            if "out of memory" in str(e) or "CUDA" in str(e):
+                pbar.write(f"⚠ GPU out of memory at batch {batch_idx}. Skipping batch...")
                 torch.cuda.empty_cache()
                 continue
             else:
                 raise e
         except Exception as e:
-            print(f"\n⚠ Error at batch {batch_idx}: {e}")
+            # Check if it's a CUDA memory error in the exception message
+            if "out of memory" in str(e).lower() or "cuda" in str(e).lower():
+                pbar.write(f"⚠ GPU out of memory at batch {batch_idx}. Skipping batch...")
+                torch.cuda.empty_cache()
+                continue
+            pbar.write(f"⚠ Error at batch {batch_idx}: {e}")
             raise e
     
-    avg_loss = total_loss / num_batches if num_batches > 0 else float('inf')
+    if num_batches == 0:
+        raise RuntimeError(
+            "All training batches failed due to GPU out of memory!\n"
+            "Please reduce batch size (try --batch_size 8 or --batch_size 16)"
+        )
+    
+    avg_loss = total_loss / num_batches
     return avg_loss
 
 
@@ -183,8 +204,11 @@ def validate(model, dataloader, criterion, device):
     total_loss = 0.0
     num_batches = 0
     
+    # Create progress bar for validation batches
+    pbar = tqdm(dataloader, desc="Validation", leave=False, ncols=100)
+    
     with torch.no_grad():
-        for images, text_embeddings, image_ids in dataloader:
+        for images, text_embeddings, image_ids in pbar:
             try:
                 # Move data to device
                 images = images.to(device)
@@ -201,12 +225,22 @@ def validate(model, dataloader, criterion, device):
                 
                 total_loss += loss.item()
                 num_batches += 1
+                
+                # Update progress bar
+                pbar.set_postfix({
+                    'Loss': f'{loss.item():.4f}',
+                    'Avg': f'{total_loss/num_batches:.4f}'
+                })
             
             except Exception as e:
-                print(f"\n⚠ Validation error: {e}")
+                pbar.write(f"⚠ Validation error: {e}")
                 continue
     
-    avg_loss = total_loss / num_batches if num_batches > 0 else float('inf')
+    if num_batches == 0:
+        print("⚠ Warning: All validation batches failed. Returning high loss value.")
+        return 999.0
+    
+    avg_loss = total_loss / num_batches
     return avg_loss
 
 
@@ -263,7 +297,7 @@ def generate_training_report(train_losses, val_losses, temperatures, total_time,
         report_path (str): Path to save report
     """
     if report_path is None:
-        report_path = os.path.join(config.PROJECT_ROOT, 'training_report.txt')
+        report_path = os.path.join(config.TRAIN_DIR, 'training_report.txt')
     
     if issues is None:
         issues = []
@@ -272,7 +306,7 @@ def generate_training_report(train_losses, val_losses, temperatures, total_time,
     minutes = int((total_time % 3600) // 60)
     seconds = int(total_time % 60)
     
-    with open(report_path, 'w') as f:
+    with open(report_path, 'w', encoding='utf-8') as f:
         f.write("="*70 + "\n")
         f.write("CLIP Training Report\n")
         f.write("="*70 + "\n\n")
@@ -318,7 +352,7 @@ def generate_training_report(train_losses, val_losses, temperatures, total_time,
             f.write("OBSERVED ISSUES\n")
             f.write("-"*70 + "\n")
             for issue in issues:
-                f.write(f"⚠ {issue}\n")
+                f.write(f"[!] {issue}\n")
             f.write("\n")
         
         # Loss per epoch
@@ -337,6 +371,140 @@ def generate_training_report(train_losses, val_losses, temperatures, total_time,
                 f.write(f"{i+1:<8} {str(t_loss):<15} {str(v_loss):<15} {str(temp):<15}\n")
     
     print(f"✓ Saved training report to {report_path}")
+
+
+def save_checkpoint(model, optimizer, criterion, epoch, train_losses, val_losses, temperatures, 
+                   best_val_loss, checkpoint_dir, is_best=False, save_optimizer=False):
+    """
+    Save a training checkpoint.
+    
+    Args:
+        model: The model to save
+        optimizer: The optimizer state
+        criterion: The loss function (for temperature parameter)
+        epoch: Current epoch number
+        train_losses: List of training losses
+        val_losses: List of validation losses
+        temperatures: List of temperature values
+        best_val_loss: Best validation loss so far
+        checkpoint_dir: Directory to save checkpoints
+        is_best: Whether this is the best model so far
+        save_optimizer: Whether to save optimizer state (default False - saves space and avoids write errors)
+    """
+    try:
+        os.makedirs(checkpoint_dir, exist_ok=True)
+    except Exception as e:
+        print(f"⚠ Warning: Failed to create checkpoint directory: {e}")
+        return
+    
+    # Create checkpoint dict (without optimizer state by default to avoid large file issues)
+    try:
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'criterion_state_dict': criterion.state_dict(),
+            'train_losses': train_losses,
+            'val_losses': val_losses,
+            'temperatures': temperatures,
+            'best_val_loss': best_val_loss,
+        }
+        
+        # Only include optimizer state if explicitly requested (it triples the file size)
+        if save_optimizer:
+            checkpoint['optimizer_state_dict'] = optimizer.state_dict()
+    except Exception as e:
+        print(f"⚠ Warning: Failed to create checkpoint dict: {e}")
+        return
+    
+    # Save regular checkpoint with atomic write pattern
+    checkpoint_path = os.path.join(checkpoint_dir, f'checkpoint_epoch_{epoch}.pt')
+    temp_checkpoint_path = checkpoint_path + '.tmp'
+    
+    try:
+        # Save to temporary file first (atomic write pattern prevents corruption)
+        torch.save(checkpoint, temp_checkpoint_path)
+        # Only rename to final path if save succeeded
+        if os.path.exists(checkpoint_path):
+            os.remove(checkpoint_path)
+        os.rename(temp_checkpoint_path, checkpoint_path)
+        
+        # Get file size for reporting
+        file_size_mb = os.path.getsize(checkpoint_path) / (1024 * 1024)
+        opt_note = " (with optimizer)" if save_optimizer else ""
+        print(f"✓ Saved checkpoint{opt_note}: {checkpoint_path} ({file_size_mb:.1f} MB)")
+    except Exception as e:
+        print(f"❌ Failed to save checkpoint: {e}")
+        # Clean up temp file if it exists
+        if os.path.exists(temp_checkpoint_path):
+            try:
+                os.remove(temp_checkpoint_path)
+            except:
+                pass
+        return
+    
+    # Save best model separately (also without optimizer state by default)
+    if is_best:
+        best_path = os.path.join(checkpoint_dir, 'checkpoint_best.pt')
+        temp_best_path = best_path + '.tmp'
+        try:
+            torch.save(checkpoint, temp_best_path)
+            if os.path.exists(best_path):
+                os.remove(best_path)
+            os.rename(temp_best_path, best_path)
+            print(f"✓ Saved best model checkpoint (val_loss: {best_val_loss:.4f})")
+        except Exception as e:
+            print(f"⚠ Warning: Failed to save best checkpoint: {e}")
+            # Clean up temp file
+            if os.path.exists(temp_best_path):
+                try:
+                    os.remove(temp_best_path)
+                except:
+                    pass
+
+
+def load_checkpoint(checkpoint_path, model, optimizer, criterion, device):
+    """
+    Load a training checkpoint.
+    
+    Args:
+        checkpoint_path: Path to checkpoint file
+        model: Model to load state into
+        optimizer: Optimizer to load state into (can be None)
+        criterion: Loss function to load state into
+        device: Device to load checkpoint on
+    
+    Returns:
+        dict: Checkpoint data (epoch, losses, etc.)
+    """
+    print(f"\nLoading checkpoint from {checkpoint_path}...")
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    
+    model.load_state_dict(checkpoint['model_state_dict'])
+    
+    # Load optimizer state if available (lightweight checkpoints may not have it)
+    if 'optimizer_state_dict' in checkpoint and optimizer is not None:
+        try:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            print(f"✓ Loaded optimizer state")
+        except Exception as e:
+            print(f"⚠ Warning: Could not load optimizer state: {e}")
+            print(f"  Training will continue with fresh optimizer state")
+    else:
+        print(f"⚠ Checkpoint does not contain optimizer state (lightweight checkpoint)")
+        print(f"  Training will continue with fresh optimizer state")
+    
+    criterion.load_state_dict(checkpoint['criterion_state_dict'])
+    
+    print(f"✓ Loaded checkpoint from epoch {checkpoint['epoch']}")
+    
+    # Format best_val_loss with proper handling for missing values
+    best_val = checkpoint.get('best_val_loss', None)
+    if best_val is not None:
+        print(f"  Best validation loss: {best_val:.4f}")
+    else:
+        print(f"  Best validation loss: N/A")
+    
+    return checkpoint
 
 
 def check_for_divergence(losses, threshold=100.0):
@@ -374,6 +542,11 @@ def main():
     parser.add_argument('--init_temperature', type=float, default=0.07, help='Initial temperature (default: 0.07)')
     parser.add_argument('--device', type=str, default=None, help='Device (cuda/cpu, default: auto)')
     parser.add_argument('--num_workers', type=int, default=None, help='DataLoader num_workers (default: from config)')
+    parser.add_argument('--max_samples', type=int, default=None, help='Limit dataset to N samples for quick testing (default: None, use full dataset)')
+    parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume training from (default: None)')
+    parser.add_argument('--save_every', type=int, default=1, help='Save checkpoint every N epochs (default: 1)')
+    parser.add_argument('--save_optimizer', action='store_true', help='Save optimizer state in checkpoints (increases file size ~3x)')
+    parser.add_argument('--no_pin_memory', action='store_true', help='Disable pin_memory (useful for smaller GPUs)')
     
     args = parser.parse_args()
     
@@ -383,8 +556,25 @@ def main():
     else:
         device = torch.device(args.device)
     
+    # Clear GPU cache if using CUDA
+    if device.type == 'cuda':
+        torch.cuda.empty_cache()
+        print(f"✓ Cleared GPU cache")
+    
     # Get GPU info
     gpu_info = get_gpu_info()
+    
+    # Auto-disable pin_memory for smaller GPUs (< 8GB) unless explicitly enabled
+    if device.type == 'cuda' and not args.no_pin_memory:
+        try:
+            gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            if gpu_memory_gb < 8.0:
+                print(f"⚠ GPU has {gpu_memory_gb:.1f}GB - auto-disabling pin_memory for better memory usage")
+                args.no_pin_memory = True
+        except:
+            pass
+    
+    use_pin_memory = config.PIN_MEMORY and device.type == 'cuda' and not args.no_pin_memory
     
     print("="*70)
     print("CLIP Training Script")
@@ -395,7 +585,16 @@ def main():
     print(f"  Epochs: {args.epochs}")
     print(f"  Weight decay: {args.weight_decay}")
     print(f"  Initial temperature: {args.init_temperature}")
+    if args.max_samples is not None:
+        print(f"  Max samples (testing): {args.max_samples}")
+    if args.resume:
+        print(f"  Resume from: {args.resume}")
+    print(f"  Save every: {args.save_every} epoch(s)")
+    print(f"  Pin memory: {use_pin_memory}")
     print(f"  Device: {device} ({gpu_info})")
+    if device.type == 'cuda' and args.batch_size >= 32:
+        print(f"\n⚠ WARNING: Batch size {args.batch_size} may be too large for 6GB GPU!")
+        print(f"   Consider using --batch_size 8 or --batch_size 16")
     print("="*70)
     
     # Create directories
@@ -435,22 +634,79 @@ def main():
         print(f"\n❌ Error creating datasets: {e}")
         sys.exit(1)
     
+    # Limit datasets for quick testing if requested
+    if args.max_samples is not None:
+        print(f"\n⚠ Limiting datasets to {args.max_samples} samples for quick testing...")
+        train_indices = list(range(min(args.max_samples, len(train_dataset))))
+        val_indices = list(range(min(args.max_samples, len(val_dataset))))
+        train_dataset = Subset(train_dataset, train_indices)
+        val_dataset = Subset(val_dataset, val_indices)
+        print(f"✓ Train dataset limited to: {len(train_dataset)} samples")
+        print(f"✓ Val dataset limited to: {len(val_dataset)} samples")
+    
     # Create dataloaders
     num_workers = args.num_workers if args.num_workers is not None else config.NUM_WORKERS
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=config.PIN_MEMORY if device.type == 'cuda' else False
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=config.PIN_MEMORY if device.type == 'cuda' else False
-    )
+    
+    # Try creating dataloaders with pin_memory, fallback if it fails
+    try:
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=use_pin_memory
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=use_pin_memory
+        )
+        # Test if we can actually load a batch (catches pin_memory OOM early)
+        if use_pin_memory and device.type == 'cuda':
+            try:
+                _ = next(iter(train_loader))
+            except (RuntimeError, torch.cuda.OutOfMemoryError) as e:
+                if "out of memory" in str(e).lower() or "cuda" in str(e).lower():
+                    print(f"\n⚠ Pin memory causes OOM, disabling it...")
+                    use_pin_memory = False
+                    train_loader = DataLoader(
+                        train_dataset,
+                        batch_size=args.batch_size,
+                        shuffle=True,
+                        num_workers=num_workers,
+                        pin_memory=False
+                    )
+                    val_loader = DataLoader(
+                        val_dataset,
+                        batch_size=args.batch_size,
+                        shuffle=False,
+                        num_workers=num_workers,
+                        pin_memory=False
+                    )
+    except Exception as e:
+        if "out of memory" in str(e).lower() or "cuda" in str(e).lower():
+            print(f"\n⚠ OOM during DataLoader creation, disabling pin_memory and retrying...")
+            use_pin_memory = False
+            torch.cuda.empty_cache()
+            train_loader = DataLoader(
+                train_dataset,
+                batch_size=args.batch_size,
+                shuffle=True,
+                num_workers=num_workers,
+                pin_memory=False
+            )
+            val_loader = DataLoader(
+                val_dataset,
+                batch_size=args.batch_size,
+                shuffle=False,
+                num_workers=num_workers,
+                pin_memory=False
+            )
+        else:
+            raise e
+    
     print(f"✓ Train loader: {len(train_loader)} batches")
     print(f"✓ Val loader: {len(val_loader)} batches")
     
@@ -476,22 +732,39 @@ def main():
     )
     print(f"✓ Created AdamW optimizer (lr={args.lr}, weight_decay={args.weight_decay})")
     
+    # Initialize training state
+    start_epoch = 1
+    train_losses = []
+    val_losses = []
+    temperatures = []
+    best_val_loss = float('inf')
+    issues = []
+    
+    # Resume from checkpoint if specified
+    if args.resume:
+        if not os.path.exists(args.resume):
+            print(f"\n❌ Error: Checkpoint file not found: {args.resume}")
+            sys.exit(1)
+        checkpoint_data = load_checkpoint(args.resume, model, optimizer, criterion, device)
+        start_epoch = checkpoint_data['epoch'] + 1
+        train_losses = checkpoint_data.get('train_losses', [])
+        val_losses = checkpoint_data.get('val_losses', [])
+        temperatures = checkpoint_data.get('temperatures', [])
+        best_val_loss = checkpoint_data.get('best_val_loss', float('inf'))
+        print(f"✓ Resuming training from epoch {start_epoch}")
+    
     # Training loop
     print("\n" + "="*70)
     print("Starting Training")
     print("="*70)
     
-    train_losses = []
-    val_losses = []
-    temperatures = []
-    issues = []
     start_time = time.time()
     
     try:
-        for epoch in range(1, args.epochs + 1):
-            print(f"\nEpoch [{epoch}/{args.epochs}]")
-            print("-" * 70)
-            
+        # Create overall progress bar for epochs
+        epoch_pbar = tqdm(range(start_epoch, args.epochs + 1), desc="Training Progress", ncols=100)
+        
+        for epoch in epoch_pbar:
             # Train
             train_loss = train_epoch(model, train_loader, criterion, optimizer, device, epoch, args.epochs)
             train_losses.append(train_loss)
@@ -504,11 +777,32 @@ def main():
             temp_value = criterion.temperature.item()
             temperatures.append(temp_value)
             
+            # Update epoch progress bar
+            epoch_pbar.set_postfix({
+                'Train Loss': f'{train_loss:.4f}',
+                'Val Loss': f'{val_loss:.4f}',
+                'τ': f'{temp_value:.4f}'
+            })
+            
             # Log epoch results
-            print(f"\nEpoch [{epoch}/{args.epochs}] Summary:")
-            print(f"  Train Loss: {train_loss:.4f}")
-            print(f"  Val Loss:   {val_loss:.4f}")
-            print(f"  Temperature τ: {temp_value:.4f}")
+            epoch_pbar.write(f"\nEpoch [{epoch}/{args.epochs}] Summary:")
+            epoch_pbar.write(f"  Train Loss: {train_loss:.4f}")
+            epoch_pbar.write(f"  Val Loss:   {val_loss:.4f}")
+            epoch_pbar.write(f"  Temperature τ: {temp_value:.4f}")
+            
+            # Check if this is the best model
+            is_best = val_loss < best_val_loss
+            if is_best:
+                best_val_loss = val_loss
+                epoch_pbar.write(f"  🎯 New best validation loss!")
+            
+            # Save checkpoint
+            if epoch % args.save_every == 0 or is_best:
+                save_checkpoint(
+                    model, optimizer, criterion, epoch, train_losses, val_losses, temperatures,
+                    best_val_loss, config.CHECKPOINTS_DIR, is_best=is_best, 
+                    save_optimizer=args.save_optimizer
+                )
             
             # Check for divergence
             if check_for_divergence(train_losses):
@@ -564,7 +858,7 @@ def main():
         # Generate plots and report
         if len(train_losses) > 0 and len(val_losses) > 0:
             # Plot loss curves and temperature
-            plot_path = os.path.join(config.PROJECT_ROOT, 'loss_curves.png')
+            plot_path = os.path.join(config.TRAIN_DIR, 'loss_curves.png')
             plot_loss_curves(train_losses, val_losses, temperatures, plot_path)
             
             # Generate training report

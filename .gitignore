@@ -121,7 +121,6 @@ wandb/
 mlruns/
 
 # Data (if you add other datasets)
-data/
 *.zip
 *.tar.gz
 *.tar

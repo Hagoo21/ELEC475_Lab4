@@ -121,7 +121,8 @@ wandb/
 mlruns/
 
 # Data (if you add other datasets)
-data/
+coco2014/
+data/annotations/
 *.zip
 *.tar.gz
 *.tar

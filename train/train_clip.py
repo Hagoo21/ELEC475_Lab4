@@ -30,7 +30,7 @@ from tqdm import tqdm
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 from models.clip_model import create_clip_model
-from data.dataloader import COCOCLIPDataset
+from datasets.dataloader import COCOCLIPDataset
 
 
 class InfoNCELoss(nn.Module):
@@ -608,7 +608,7 @@ def main():
     ]
     if missing_paths:
         print(f"\n❌ Error: Cached embeddings not found!")
-        print(f"   Please run: python data/preprocess_data.py")
+        print(f"   Please run: python datasets/preprocess_data.py")
         print(f"   Missing:")
         for path in missing_paths:
             print(f"     - {path}")

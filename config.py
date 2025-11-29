@@ -15,10 +15,8 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # Dataset paths
 DATASETS_DIR = os.path.join(PROJECT_ROOT, 'datasets')
-DATA_DIR = os.path.join(DATASETS_DIR, 'coco_subset')
+DATA_DIR = os.path.join(DATASETS_DIR, 'coco2014')  # Updated to match actual data location
 CACHE_DIR = os.path.join(DATASETS_DIR, 'cache')
-ANNOTATIONS_CACHE_DIR = os.path.join(DATASETS_DIR, 'coco_annotations_cache')
-EDA_OUTPUT_DIR = os.path.join(DATASETS_DIR, 'eda_results')
 
 # Training paths
 TRAIN_DIR = os.path.join(PROJECT_ROOT, 'train')
@@ -130,13 +128,13 @@ WANDB_ENTITY = None  # Your W&B username/team
 # ============================================================================
 
 # Train split paths
-TRAIN_IMAGES_DIR = os.path.join(DATA_DIR, 'train', 'images')
-TRAIN_CAPTIONS_PATH = os.path.join(DATA_DIR, 'train', 'captions.json')
+TRAIN_IMAGES_DIR = os.path.join(DATA_DIR, 'images', 'train2014')
+TRAIN_CAPTIONS_PATH = os.path.join(DATA_DIR, 'annotations', 'captions_train2014.json')
 TRAIN_EMBEDDINGS_PATH = os.path.join(CACHE_DIR, 'train_text_embeds.pt')
 
 # Val split paths
-VAL_IMAGES_DIR = os.path.join(DATA_DIR, 'val', 'images')
-VAL_CAPTIONS_PATH = os.path.join(DATA_DIR, 'val', 'captions.json')
+VAL_IMAGES_DIR = os.path.join(DATA_DIR, 'images', 'val2014')
+VAL_CAPTIONS_PATH = os.path.join(DATA_DIR, 'annotations', 'captions_val2014.json')
 VAL_EMBEDDINGS_PATH = os.path.join(CACHE_DIR, 'val_text_embeds.pt')
 
 # ============================================================================
@@ -149,8 +147,6 @@ def create_directories():
         DATASETS_DIR,
         DATA_DIR,
         CACHE_DIR,
-        ANNOTATIONS_CACHE_DIR,
-        EDA_OUTPUT_DIR,
         TRAIN_DIR,
         CHECKPOINTS_DIR,
         LOGS_DIR,

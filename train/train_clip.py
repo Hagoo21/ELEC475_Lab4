@@ -30,7 +30,7 @@ from tqdm import tqdm
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 from models.clip_model import create_clip_model
-from datasets.prepare_coco_clip_dataset import COCOCLIPDataset
+from data.dataloader import COCOCLIPDataset
 
 
 class InfoNCELoss(nn.Module):
@@ -600,20 +600,20 @@ def main():
     # Create directories
     config.create_directories()
     
-    # Load cached text embeddings
-    print("\nLoading cached text embeddings...")
-    try:
-        train_text_embeddings = torch.load(config.TRAIN_EMBEDDINGS_PATH, map_location='cpu')
-        val_text_embeddings = torch.load(config.VAL_EMBEDDINGS_PATH, map_location='cpu')
-        print(f"✓ Loaded train embeddings: {len(train_text_embeddings)} samples")
-        print(f"✓ Loaded val embeddings: {len(val_text_embeddings)} samples")
-    except FileNotFoundError as e:
+    # Ensure cached text embeddings exist
+    print("\nChecking cached text embeddings...")
+    missing_paths = [
+        path for path in (config.TRAIN_EMBEDDINGS_PATH, config.VAL_EMBEDDINGS_PATH)
+        if not os.path.exists(path)
+    ]
+    if missing_paths:
         print(f"\n❌ Error: Cached embeddings not found!")
-        print(f"   Please run: python datasets/prepare_coco_clip_dataset.py")
-        print(f"   Expected paths:")
-        print(f"     - {config.TRAIN_EMBEDDINGS_PATH}")
-        print(f"     - {config.VAL_EMBEDDINGS_PATH}")
+        print(f"   Please run: python data/preprocess_data.py")
+        print(f"   Missing:")
+        for path in missing_paths:
+            print(f"     - {path}")
         sys.exit(1)
+    print("✓ Found cached embeddings for train/val splits")
     
     # Create datasets
     print("\nCreating datasets...")
@@ -621,12 +621,12 @@ def main():
         train_dataset = COCOCLIPDataset(
             images_dir=config.TRAIN_IMAGES_DIR,
             captions_path=config.TRAIN_CAPTIONS_PATH,
-            text_embeddings=train_text_embeddings
+            text_embeddings=config.TRAIN_EMBEDDINGS_PATH
         )
         val_dataset = COCOCLIPDataset(
             images_dir=config.VAL_IMAGES_DIR,
             captions_path=config.VAL_CAPTIONS_PATH,
-            text_embeddings=val_text_embeddings
+            text_embeddings=config.VAL_EMBEDDINGS_PATH
         )
         print(f"✓ Train dataset: {len(train_dataset)} samples")
         print(f"✓ Val dataset: {len(val_dataset)} samples")

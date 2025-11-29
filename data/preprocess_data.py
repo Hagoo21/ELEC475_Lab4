@@ -14,7 +14,9 @@ CLIP_STD = [0.26862954, 0.26130258, 0.27577711]
 IMAGE_SIZE = 224
 
 # Paths (Adjust to your local structure)
-DATA_DIR = "./coco2014" # Example root
+# Get the directory where this script is located
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(SCRIPT_DIR, "coco2014")  # Points to data/coco2014/
 TRAIN_IMG_DIR = os.path.join(DATA_DIR, "images", "train2014")
 VAL_IMG_DIR = os.path.join(DATA_DIR, "images", "val2014")
 TRAIN_CAP_FILE = os.path.join(DATA_DIR, "annotations/captions_train2014.json")
@@ -85,6 +87,40 @@ def cache_text_embeddings(json_path, save_path, batch_size=32):
     torch.save(cached_data, save_path)
     print("Done.")
 
-# --- Run Caching (Uncomment to run once) ---
-# cache_text_embeddings(TRAIN_CAP_FILE, "train_cache.pt")
-# cache_text_embeddings(VAL_CAP_FILE, "val_cache.pt")
+def main():
+    """
+    Main function to cache text embeddings for train and validation sets.
+    """
+    # Create cache directory if it doesn't exist
+    cache_dir = os.path.join(SCRIPT_DIR, "..", "datasets", "cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    
+    # Define cache file paths
+    train_cache_path = os.path.join(cache_dir, "train_text_embeds.pt")
+    val_cache_path = os.path.join(cache_dir, "val_text_embeds.pt")
+    
+    # Check if files already exist
+    if os.path.exists(train_cache_path):
+        print(f"⚠️  Train cache already exists at {train_cache_path}")
+        response = input("Do you want to regenerate it? (y/n): ")
+        if response.lower() != 'y':
+            print("Skipping train cache generation.")
+        else:
+            cache_text_embeddings(TRAIN_CAP_FILE, train_cache_path)
+    else:
+        cache_text_embeddings(TRAIN_CAP_FILE, train_cache_path)
+    
+    if os.path.exists(val_cache_path):
+        print(f"⚠️  Val cache already exists at {val_cache_path}")
+        response = input("Do you want to regenerate it? (y/n): ")
+        if response.lower() != 'y':
+            print("Skipping val cache generation.")
+        else:
+            cache_text_embeddings(VAL_CAP_FILE, val_cache_path)
+    else:
+        cache_text_embeddings(VAL_CAP_FILE, val_cache_path)
+    
+    print("\n✅ Preprocessing complete!")
+
+if __name__ == "__main__":
+    main()

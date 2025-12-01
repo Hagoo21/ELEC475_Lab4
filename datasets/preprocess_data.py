@@ -44,9 +44,20 @@ def cache_text_embeddings(json_path, save_path, batch_size=32):
     
     # Load Pretrained CLIP Model (includes text_projection layer)
     # Using CLIPModel instead of CLIPTextModel to match training code
+    # Force fresh download to avoid corrupted cache issues
     model_id = "openai/clip-vit-base-patch32"
-    tokenizer = CLIPTokenizer.from_pretrained(model_id)
-    clip_model = CLIPModel.from_pretrained(model_id).to(device)
+    tokenizer = CLIPTokenizer.from_pretrained(
+        model_id, 
+        force_download=True, 
+        resume_download=False,
+        local_files_only=False
+    )
+    clip_model = CLIPModel.from_pretrained(
+        model_id,
+        force_download=True,
+        resume_download=False,
+        local_files_only=False
+    ).to(device)
     clip_model.eval()
 
     # Load JSON

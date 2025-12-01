@@ -116,16 +116,25 @@ def get_gpu_info():
     return "CPU"
 
 
-def train_epoch(model, dataloader, criterion, optimizer, device, epoch, num_epochs):
+def train_epoch(model, dataloader, criterion, optimizer, device, epoch, num_epochs, grad_clip=5.0, log_gradients=False):
     """
     Train for one epoch.
     
+    Args:
+        log_gradients (bool): If True, log gradient statistics
+    
     Returns:
-        float: Average training loss for the epoch
+        tuple: (average_loss, gradient_stats_dict)
+            - average_loss: Average training loss for the epoch
+            - gradient_stats_dict: Dictionary with gradient statistics (if log_gradients=True)
     """
     model.train()
     total_loss = 0.0
     num_batches = 0
+    
+    # Gradient monitoring
+    gradient_norms = []
+    clipped_gradient_norms = []
     
     # Create progress bar for training batches
     pbar = tqdm(dataloader, desc=f"Epoch {epoch}/{num_epochs} [Train]", 
@@ -150,9 +159,18 @@ def train_epoch(model, dataloader, criterion, optimizer, device, epoch, num_epoc
             optimizer.zero_grad()
             loss.backward()
             
-            # Gradient clipping for stability (includes temperature parameter)
+            # Compute gradient norms before clipping (for monitoring)
             all_params = list(model.parameters()) + [criterion.log_temperature]
-            torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
+            total_grad_norm = torch.nn.utils.clip_grad_norm_(all_params, max_norm=float('inf'))
+            
+            # Gradient clipping for stability (includes temperature parameter)
+            # Default increased from 1.0 to 5.0 to allow more learning
+            clipped_grad_norm = torch.nn.utils.clip_grad_norm_(all_params, max_norm=grad_clip)
+            
+            # Store gradient norms for logging
+            if log_gradients:
+                gradient_norms.append(total_grad_norm.item())
+                clipped_gradient_norms.append(clipped_grad_norm.item())
             
             optimizer.step()
             
@@ -160,12 +178,13 @@ def train_epoch(model, dataloader, criterion, optimizer, device, epoch, num_epoc
             total_loss += loss.item()
             num_batches += 1
             
-            # Update progress bar with current loss and temperature
+            # Update progress bar with current loss, temperature, and gradient info
             current_loss = loss.item()
             current_temp = criterion.temperature.item()
             pbar.set_postfix({
                 'Loss': f'{current_loss:.4f}',
                 'τ': f'{current_temp:.4f}',
+                'Grad': f'{total_grad_norm.item():.3f}',
                 'Avg': f'{total_loss/num_batches:.4f}'
             })
         
@@ -192,7 +211,18 @@ def train_epoch(model, dataloader, criterion, optimizer, device, epoch, num_epoc
         )
     
     avg_loss = total_loss / num_batches
-    return avg_loss
+    
+    # Prepare gradient statistics
+    grad_stats = {}
+    if log_gradients and gradient_norms:
+        grad_stats = {
+            'mean_grad_norm': sum(gradient_norms) / len(gradient_norms),
+            'max_grad_norm': max(gradient_norms),
+            'mean_clipped_grad_norm': sum(clipped_gradient_norms) / len(clipped_gradient_norms),
+            'clipping_ratio': sum(1 for g, c in zip(gradient_norms, clipped_gradient_norms) if g > c) / len(gradient_norms)
+        }
+    
+    return avg_loss, grad_stats
 
 
 def validate(model, dataloader, criterion, device):
@@ -284,7 +314,7 @@ def plot_loss_curves(train_losses, val_losses, temperatures, save_path):
 
 
 def generate_training_report(train_losses, val_losses, temperatures, total_time, gpu_info, 
-                              args, issues=None, report_path=None):
+                              args, issues=None, report_path=None, gradient_stats=None):
     """
     Generate a text report with training summary.
     
@@ -320,6 +350,7 @@ def generate_training_report(train_losses, val_losses, temperatures, total_time,
         f.write(f"Learning rate:        {args.lr}\n")
         f.write(f"Epochs:               {args.epochs}\n")
         f.write(f"Weight decay:         {args.weight_decay}\n")
+        f.write(f"Gradient clip norm:   {args.grad_clip}\n")
         f.write(f"Initial temperature:  {args.init_temperature}\n")
         f.write(f"Device:               {args.device if args.device else 'auto'}\n")
         f.write("\n")
@@ -348,6 +379,18 @@ def generate_training_report(train_losses, val_losses, temperatures, total_time,
             f.write(f"Final temperature:    {temperatures[-1]:.4f}\n")
         f.write(f"Epochs completed:     {len(train_losses)}/{args.epochs}\n")
         f.write("\n")
+        
+        # Gradient statistics
+        if gradient_stats and len(gradient_stats) > 0:
+            f.write("GRADIENT STATISTICS\n")
+            f.write("-"*70 + "\n")
+            avg_grad_norm = sum(s.get('mean_grad_norm', 0) for s in gradient_stats) / len(gradient_stats)
+            max_grad_norm = max(s.get('max_grad_norm', 0) for s in gradient_stats)
+            avg_clipping_ratio = sum(s.get('clipping_ratio', 0) for s in gradient_stats) / len(gradient_stats)
+            f.write(f"Average gradient norm: {avg_grad_norm:.3f}\n")
+            f.write(f"Max gradient norm:     {max_grad_norm:.3f}\n")
+            f.write(f"Gradients clipped:     {100*avg_clipping_ratio:.1f}% of batches\n")
+            f.write("\n")
         
         # Issues
         if issues:
@@ -538,10 +581,12 @@ def check_for_divergence(losses, threshold=100.0):
 def main():
     parser = argparse.ArgumentParser(description='Train CLIP model with InfoNCE loss')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size (default: 64)')
-    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate (default: 1e-4)')
+    parser.add_argument('--lr', type=float, default=5e-4, help='Learning rate (default: 5e-4, increased from 1e-4 for better learning)')
     parser.add_argument('--epochs', type=int, default=10, help='Number of epochs (default: 10)')
     parser.add_argument('--weight_decay', type=float, default=0.01, help='Weight decay (default: 0.01)')
     parser.add_argument('--init_temperature', type=float, default=0.07, help='Initial temperature (default: 0.07)')
+    parser.add_argument('--grad_clip', type=float, default=5.0, help='Gradient clipping max norm (default: 5.0, increased from 1.0)')
+    parser.add_argument('--log_gradients', action='store_true', help='Log gradient statistics to training report')
     parser.add_argument('--device', type=str, default=None, help='Device (cuda/mps/cpu, default: auto - prefers MPS on Mac, CUDA on Linux/Windows)')
     parser.add_argument('--num_workers', type=int, default=None, help='DataLoader num_workers (default: from config)')
     parser.add_argument('--max_samples', type=int, default=None, help='Limit dataset to N samples for quick testing (default: None, use full dataset)')
@@ -599,7 +644,10 @@ def main():
     print(f"  Learning rate: {args.lr}")
     print(f"  Epochs: {args.epochs}")
     print(f"  Weight decay: {args.weight_decay}")
+    print(f"  Gradient clip norm: {args.grad_clip}")
     print(f"  Initial temperature: {args.init_temperature}")
+    if args.log_gradients:
+        print(f"  Gradient logging: ENABLED")
     if args.train_percentage is not None:
         print(f"  Train percentage: {args.train_percentage}%")
     if args.max_samples is not None:
@@ -774,6 +822,7 @@ def main():
     train_losses = []
     val_losses = []
     temperatures = []
+    gradient_stats = []  # Store gradient statistics per epoch
     best_val_loss = float('inf')
     issues = []
     
@@ -803,8 +852,13 @@ def main():
         
         for epoch in epoch_pbar:
             # Train
-            train_loss = train_epoch(model, train_loader, criterion, optimizer, device, epoch, args.epochs)
+            train_loss, grad_stats = train_epoch(
+                model, train_loader, criterion, optimizer, device, epoch, args.epochs,
+                grad_clip=args.grad_clip, log_gradients=args.log_gradients
+            )
             train_losses.append(train_loss)
+            if grad_stats:
+                gradient_stats.append(grad_stats)
             
             # Validate
             val_loss = validate(model, val_loader, criterion, device)
@@ -826,6 +880,10 @@ def main():
             epoch_pbar.write(f"  Train Loss: {train_loss:.4f}")
             epoch_pbar.write(f"  Val Loss:   {val_loss:.4f}")
             epoch_pbar.write(f"  Temperature τ: {temp_value:.4f}")
+            if grad_stats:
+                epoch_pbar.write(f"  Gradient Norm: {grad_stats['mean_grad_norm']:.3f} (clipped: {grad_stats['mean_clipped_grad_norm']:.3f})")
+                if grad_stats['clipping_ratio'] > 0:
+                    epoch_pbar.write(f"  Gradients clipped: {100*grad_stats['clipping_ratio']:.1f}% of batches")
             
             # Check if this is the best model
             is_best = val_loss < best_val_loss
@@ -900,7 +958,8 @@ def main():
             
             # Generate training report
             generate_training_report(
-                train_losses, val_losses, temperatures, total_time, gpu_info, args, issues
+                train_losses, val_losses, temperatures, total_time, gpu_info, args, issues,
+                gradient_stats=gradient_stats if args.log_gradients else None
             )
         
         print("\n✓ Training complete!")

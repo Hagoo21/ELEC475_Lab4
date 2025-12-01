@@ -1,8 +1,9 @@
 import os
 import json
 import torch
+import torch.nn.functional as F
 from torchvision import transforms
-from transformers import CLIPTokenizer, CLIPTextModel
+from transformers import CLIPTokenizer, CLIPModel
 
 # Check device
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -34,16 +35,19 @@ def get_transforms():
 
 def cache_text_embeddings(json_path, save_path, batch_size=32):
     """
-    Encodes captions using pretrained CLIP text encoder and saves to .pt file.
+    Encodes captions using pretrained CLIP model and saves to .pt file.
+    Uses CLIPModel (not CLIPTextModel) to ensure text_projection is applied,
+    matching the embeddings used during training.
     This fulfills the hint to cache embeddings[cite: 57].
     """
     print(f"Processing captions from {json_path}...")
     
-    # Load Pretrained CLIP Text Encoder 
+    # Load Pretrained CLIP Model (includes text_projection layer)
+    # Using CLIPModel instead of CLIPTextModel to match training code
     model_id = "openai/clip-vit-base-patch32"
     tokenizer = CLIPTokenizer.from_pretrained(model_id)
-    text_encoder = CLIPTextModel.from_pretrained(model_id).to(device)
-    text_encoder.eval()
+    clip_model = CLIPModel.from_pretrained(model_id).to(device)
+    clip_model.eval()
 
     # Load JSON
     with open(json_path, 'r') as f:
@@ -68,9 +72,20 @@ def cache_text_embeddings(json_path, save_path, batch_size=32):
                 captions, padding=True, truncation=True, return_tensors="pt", max_length=77
             ).to(device)
 
-            # Encode
-            outputs = text_encoder(**inputs)
-            text_embeds = outputs.pooler_output.cpu() # Move back to CPU for storage
+            # Encode using CLIPModel (includes text_projection)
+            # This matches the process in models/clip_model.py
+            text_outputs = clip_model.text_model(**inputs)
+            text_embeds = text_outputs.pooler_output
+            
+            # Apply text_projection (same as in CLIPTextEncoder.forward)
+            if hasattr(clip_model, 'text_projection') and clip_model.text_projection is not None:
+                text_embeds = clip_model.text_projection(text_embeds)
+            
+            # L2 normalize embeddings (same as in training)
+            text_embeds = F.normalize(text_embeds, p=2, dim=1)
+            
+            # Move to CPU for storage
+            text_embeds = text_embeds.cpu()
 
             for j, embed in enumerate(text_embeds):
                 cached_data.append({

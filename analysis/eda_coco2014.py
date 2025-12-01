@@ -167,7 +167,7 @@ def print_caption_stats(caption_stats, split_name):
         print(f"  '{word}': {count}")
 
 
-def display_random_samples(captions_path, images_dir, num_samples=3):
+def display_random_samples(captions_path, images_dir, num_samples=3, show_images=True):
     """Display random image-caption pairs to verify dataset integrity"""
     if not os.path.exists(captions_path):
         print(f"\nCaption file not found: {captions_path}")
@@ -186,6 +186,12 @@ def display_random_samples(captions_path, images_dir, num_samples=3):
     print(f"RANDOM IMAGE-CAPTION PAIRS (Dataset Integrity Check)")
     print(f"{'='*60}")
     
+    # Prepare to display images if requested
+    if show_images:
+        fig, axes = plt.subplots(1, num_samples, figsize=(5*num_samples, 5))
+        if num_samples == 1:
+            axes = [axes]
+    
     for i, ann in enumerate(random_anns, 1):
         image_info = images_info.get(ann['image_id'])
         if image_info:
@@ -200,24 +206,45 @@ def display_random_samples(captions_path, images_dir, num_samples=3):
                     with Image.open(image_path) as img:
                         print(f"  Image Size: {img.size[0]}x{img.size[1]}")
                         print(f"  ✓ Image verified")
+                        
+                        # Display image if requested
+                        if show_images:
+                            axes[i-1].imshow(img)
+                            axes[i-1].axis('off')
+                            # Wrap caption text for better display
+                            caption_wrapped = '\n'.join([ann['caption'][j:j+40] 
+                                                        for j in range(0, len(ann['caption']), 40)])
+                            axes[i-1].set_title(f"Sample {i}\n{caption_wrapped}", 
+                                               fontsize=10, wrap=True)
                 except Exception as e:
                     print(f"  ✗ Error loading image: {e}")
             else:
                 print(f"  ✗ Image file not found!")
+    
+    if show_images:
+        plt.tight_layout()
+        plt.show()
 
 
-def analyze_category_distribution(captions_path):
-    """Analyze and display distribution of images per category/label"""
-    if not os.path.exists(captions_path):
+def analyze_category_distribution(instances_path):
+    """Analyze and display distribution of images per category/label
+    
+    Note: This requires the instances annotation file (not captions file)
+    which contains object detection annotations with category labels.
+    """
+    if not os.path.exists(instances_path):
         return None
     
-    with open(captions_path, 'r') as f:
+    with open(instances_path, 'r') as f:
         data = json.load(f)
     
     # Get categories
     categories = {cat['id']: cat['name'] for cat in data.get('categories', [])}
     
-    # Count images per category
+    if not categories:
+        return None
+    
+    # Count annotations per category (not images, as one image can have multiple categories)
     category_counts = Counter()
     for ann in data.get('annotations', []):
         if 'category_id' in ann:
@@ -310,23 +337,41 @@ def main():
     val_caption_stats = analyze_captions(VAL_CAPTIONS_PATH)
     print_caption_stats(val_caption_stats, "Validation")
     
-    # Display random image-caption pairs for integrity verification
+    # Display random image-caption pairs for integrity verification WITH IMAGES
     print(f"\nVerifying dataset integrity with random samples...")
+    print(f"\n(Images will be displayed in matplotlib windows)")
     random.seed(42)  # For reproducibility
-    display_random_samples(TRAIN_CAPTIONS_PATH, TRAIN_IMAGES_DIR, num_samples=3)
-    display_random_samples(VAL_CAPTIONS_PATH, VAL_IMAGES_DIR, num_samples=3)
+    display_random_samples(TRAIN_CAPTIONS_PATH, TRAIN_IMAGES_DIR, num_samples=3, show_images=True)
+    display_random_samples(VAL_CAPTIONS_PATH, VAL_IMAGES_DIR, num_samples=3, show_images=True)
     
-    # Analyze category distribution
-    print(f"\nAnalyzing category distribution...")
-    train_cat_data = analyze_category_distribution(TRAIN_CAPTIONS_PATH)
-    print_category_distribution(train_cat_data, "Train")
+    # Analyze category distribution from instances files
+    print(f"\nAnalyzing category distribution from instances annotations...")
     
-    val_cat_data = analyze_category_distribution(VAL_CAPTIONS_PATH)
-    print_category_distribution(val_cat_data, "Validation")
+    # Construct paths to instances files (not caption files)
+    train_instances_path = TRAIN_CAPTIONS_PATH.replace('captions_', 'instances_')
+    val_instances_path = VAL_CAPTIONS_PATH.replace('captions_', 'instances_')
+    
+    # Check if instances files exist
+    if os.path.exists(train_instances_path):
+        train_cat_data = analyze_category_distribution(train_instances_path)
+        print_category_distribution(train_cat_data, "Train")
+    else:
+        print(f"\n⚠️  Instances file not found: {train_instances_path}")
+        print(f"   Category distribution requires object detection annotations.")
+        print(f"   Caption files only contain text captions, not object categories.")
+    
+    if os.path.exists(val_instances_path):
+        val_cat_data = analyze_category_distribution(val_instances_path)
+        print_category_distribution(val_cat_data, "Validation")
+    else:
+        print(f"\n⚠️  Instances file not found: {val_instances_path}")
+        print(f"   Category distribution requires object detection annotations.")
+        print(f"   Caption files only contain text captions, not object categories.")
     
     print(f"\n{'='*60}")
     print("EDA Complete!")
     print(f"{'='*60}")
+    print(f"\nNote: Close all matplotlib windows to exit the script.")
 
 
 if __name__ == "__main__":

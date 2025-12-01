@@ -111,6 +111,8 @@ def get_gpu_info():
         gpu_name = torch.cuda.get_device_name(0)
         gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)  # GB
         return f"{gpu_name} ({gpu_memory:.1f} GB)"
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        return "Apple Silicon GPU (MPS)"
     return "CPU"
 
 
@@ -540,9 +542,10 @@ def main():
     parser.add_argument('--epochs', type=int, default=10, help='Number of epochs (default: 10)')
     parser.add_argument('--weight_decay', type=float, default=0.01, help='Weight decay (default: 0.01)')
     parser.add_argument('--init_temperature', type=float, default=0.07, help='Initial temperature (default: 0.07)')
-    parser.add_argument('--device', type=str, default=None, help='Device (cuda/cpu, default: auto)')
+    parser.add_argument('--device', type=str, default=None, help='Device (cuda/mps/cpu, default: auto - prefers MPS on Mac, CUDA on Linux/Windows)')
     parser.add_argument('--num_workers', type=int, default=None, help='DataLoader num_workers (default: from config)')
     parser.add_argument('--max_samples', type=int, default=None, help='Limit dataset to N samples for quick testing (default: None, use full dataset)')
+    parser.add_argument('--train_percentage', type=float, default=None, help='Use X%% of train dataset (e.g., 20 for 20%%, default: None, use full dataset)')
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume training from (default: None)')
     parser.add_argument('--save_every', type=int, default=1, help='Save checkpoint every N epochs (default: 1)')
     parser.add_argument('--save_optimizer', action='store_true', help='Save optimizer state in checkpoints (increases file size ~3x)')
@@ -550,21 +553,30 @@ def main():
     
     args = parser.parse_args()
     
-    # Set device
+    # Set device with automatic selection (MPS > CUDA > CPU)
     if args.device is None:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if torch.cuda.is_available():
+            device = torch.device('cuda')
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            device = torch.device('mps')
+        else:
+            device = torch.device('cpu')
     else:
         device = torch.device(args.device)
     
     # Clear GPU cache if using CUDA
     if device.type == 'cuda':
         torch.cuda.empty_cache()
-        print(f"✓ Cleared GPU cache")
+        print(f"✓ Cleared CUDA GPU cache")
+    elif device.type == 'mps':
+        # MPS doesn't need explicit cache clearing, but we can note it's being used
+        pass
     
     # Get GPU info
     gpu_info = get_gpu_info()
     
-    # Auto-disable pin_memory for smaller GPUs (< 8GB) unless explicitly enabled
+    # Auto-disable pin_memory for smaller CUDA GPUs (< 8GB) unless explicitly enabled
+    # Note: MPS doesn't support pin_memory, so it's automatically disabled for MPS
     if device.type == 'cuda' and not args.no_pin_memory:
         try:
             gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
@@ -574,7 +586,10 @@ def main():
         except:
             pass
     
+    # MPS doesn't support pin_memory, so disable it automatically
     use_pin_memory = config.PIN_MEMORY and device.type == 'cuda' and not args.no_pin_memory
+    if device.type == 'mps':
+        use_pin_memory = False
     
     print("="*70)
     print("CLIP Training Script")
@@ -585,6 +600,8 @@ def main():
     print(f"  Epochs: {args.epochs}")
     print(f"  Weight decay: {args.weight_decay}")
     print(f"  Initial temperature: {args.init_temperature}")
+    if args.train_percentage is not None:
+        print(f"  Train percentage: {args.train_percentage}%")
     if args.max_samples is not None:
         print(f"  Max samples (testing): {args.max_samples}")
     if args.resume:
@@ -595,6 +612,10 @@ def main():
     if device.type == 'cuda' and args.batch_size >= 32:
         print(f"\n⚠ WARNING: Batch size {args.batch_size} may be too large for 6GB GPU!")
         print(f"   Consider using --batch_size 8 or --batch_size 16")
+    elif device.type == 'mps':
+        if args.batch_size > 32:
+            print(f"\n⚠ Note: Using MPS (Apple Silicon GPU). Large batch sizes may cause memory issues.")
+            print(f"   If you encounter OOM errors, try reducing batch size.")
     print("="*70)
     
     # Create directories
@@ -635,7 +656,23 @@ def main():
         sys.exit(1)
     
     # Limit datasets for quick testing if requested
-    if args.max_samples is not None:
+    # Limit datasets if requested (either by max_samples or percentage)
+    if args.train_percentage is not None:
+        if args.train_percentage <= 0 or args.train_percentage > 100:
+            print(f"\n❌ Error: --train_percentage must be between 0 and 100 (got {args.train_percentage})")
+            sys.exit(1)
+        train_samples = int(len(train_dataset) * args.train_percentage / 100)
+        val_samples = int(len(val_dataset) * args.train_percentage / 100)
+        print(f"\n⚠ Using {args.train_percentage}% of datasets...")
+        print(f"  Train: {train_samples} samples (out of {len(train_dataset)})")
+        print(f"  Val: {val_samples} samples (out of {len(val_dataset)})")
+        train_indices = list(range(train_samples))
+        val_indices = list(range(val_samples))
+        train_dataset = Subset(train_dataset, train_indices)
+        val_dataset = Subset(val_dataset, val_indices)
+        print(f"✓ Train dataset limited to: {len(train_dataset)} samples")
+        print(f"✓ Val dataset limited to: {len(val_dataset)} samples")
+    elif args.max_samples is not None:
         print(f"\n⚠ Limiting datasets to {args.max_samples} samples for quick testing...")
         train_indices = list(range(min(args.max_samples, len(train_dataset))))
         val_indices = list(range(min(args.max_samples, len(val_dataset))))

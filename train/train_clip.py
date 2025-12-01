@@ -691,7 +691,7 @@ def main():
         # Apply data augmentation if using modified model
         if args.modified:
             from datasets.augmentation import get_augmentation_transforms, get_validation_transforms
-            train_transform = get_augmentation_transforms("advanced_aug")
+            train_transform = get_augmentation_transforms("advanced")
             val_transform = get_validation_transforms()
             print("✓ Using advanced data augmentation for training")
         else:

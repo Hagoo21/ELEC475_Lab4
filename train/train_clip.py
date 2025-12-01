@@ -36,72 +36,83 @@ from datasets.dataloader import COCOCLIPDataset
 class InfoNCELoss(nn.Module):
     """
     InfoNCE (Contrastive) Loss for CLIP.
-    
+
     This implements the symmetric contrastive loss as described in CLIP:
     - Computes cosine similarity between image and text embeddings
-    - Applies temperature scaling: logits = similarity * exp(τ)
+    - Uses a learnable logit scale `logit_scale`
+    - Computes logits = cosine_similarity * exp(logit_scale)
     - Uses cross-entropy loss in both directions (image->text and text->image)
     - Averages the two losses for symmetry
-    
-    The temperature τ is a learnable parameter that controls the sharpness
-    of the similarity distribution.
+
+    NOTE (lab requirement):
+    - Initialize logit_scale to ln(1/0.07) ≈ 2.659 so that exp(logit_scale) ≈ 14.285
+    - The **effective temperature** is 1 / exp(logit_scale) (≈ 0.07 at initialization)
     """
-    
-    def __init__(self, init_temperature=0.07):
+
+    def __init__(self, init_temperature: float = 0.07):
         """
-        Initialize InfoNCE loss with learnable temperature.
-        
+        Initialize InfoNCE loss with learnable logit scale.
+
         Args:
-            init_temperature (float): Initial value for temperature parameter
+            init_temperature (float): Initial effective temperature τ_0.
+                                     CLIP-style scaling uses logit_scale = ln(1/τ_0).
         """
         super(InfoNCELoss, self).__init__()
-        
-        # Learnable temperature parameter (log-space for numerical stability)
-        # We use log(τ) and then exp() it to ensure τ > 0
-        self.log_temperature = nn.Parameter(torch.log(torch.tensor(init_temperature)))
-        
+
+        # Learnable logit scale (scalar). We store it in log-space for numerical stability.
+        # Lab requirement: initialize to ln(1/0.07) ≈ 2.659 so exp(logit_scale) ≈ 14.285.
+        init_logit = torch.log(torch.tensor(1.0 / init_temperature))
+        self.logit_scale = nn.Parameter(init_logit)
+
     @property
-    def temperature(self):
-        """Get the current temperature value."""
-        return torch.exp(self.log_temperature)
-    
-    def forward(self, image_embeddings, text_embeddings):
+    def scale(self) -> torch.Tensor:
+        """Return exp(logit_scale), i.e., the multiplicative scale on cosine similarities."""
+        return torch.exp(self.logit_scale)
+
+    @property
+    def temperature(self) -> torch.Tensor:
+        """
+        Effective temperature τ = 1 / exp(logit_scale).
+
+        This is what we log in training as the “effective temperature”.
+        """
+        return torch.exp(-self.logit_scale)
+
+    def forward(self, image_embeddings: torch.Tensor, text_embeddings: torch.Tensor) -> torch.Tensor:
         """
         Compute InfoNCE loss.
-        
+
         Args:
-            image_embeddings (torch.Tensor): L2-normalized image embeddings [batch_size, embedding_dim]
-            text_embeddings (torch.Tensor): L2-normalized text embeddings [batch_size, embedding_dim]
-        
+            image_embeddings (torch.Tensor): Image embeddings [batch_size, embedding_dim]
+            text_embeddings (torch.Tensor): Text embeddings [batch_size, embedding_dim]
+
         Returns:
             torch.Tensor: Scalar loss value
         """
+        # Ensure L2 normalization (lab requirement: normalize before loss each batch)
+        image_embeddings = F.normalize(image_embeddings, p=2, dim=1)
+        text_embeddings = F.normalize(text_embeddings, p=2, dim=1)
+
         batch_size = image_embeddings.size(0)
         device = image_embeddings.device
-        
-        # Compute cosine similarity matrix (since embeddings are L2-normalized)
-        # Shape: [batch_size, batch_size]
-        # logits[i, j] = similarity between image i and text j
+
+        # Cosine similarity matrix (embeddings are normalized)
+        # Shape: [batch_size, batch_size], logits[i, j] = similarity(img_i, txt_j)
         logits = torch.matmul(image_embeddings, text_embeddings.t())
-        
-        # Apply temperature scaling: logits = similarity * exp(τ)
-        # This makes the distribution sharper (higher confidence) as τ increases
-        logits = logits * self.temperature
-        
-        # Create labels: diagonal elements are positive pairs
-        # i-th image should match i-th text
+
+        # CLIP-style scaling: logits = cosine_similarity * exp(logit_scale)
+        logits = logits * self.scale
+
+        # Labels: diagonal elements are positive pairs (i-th image ↔ i-th text)
         labels = torch.arange(batch_size, device=device)
-        
-        # Symmetric loss: compute loss from both perspectives
-        # 1. Image-to-text: for each image, predict which text matches
+
+        # Symmetric loss: image→text and text→image
         loss_i2t = F.cross_entropy(logits, labels)
-        
-        # 2. Text-to-image: for each text, predict which image matches
         loss_t2i = F.cross_entropy(logits.t(), labels)
-        
+
         # Average the two losses for symmetry
         loss = (loss_i2t + loss_t2i) / 2.0
-        
+
         return loss
 
 
@@ -275,6 +286,110 @@ def validate(model, dataloader, criterion, device):
     avg_loss = total_loss / num_batches
     return avg_loss
 
+
+def compute_recall_at_k(model, dataloader, device, ks=(1, 5, 10)):
+    """
+    Compute Recall@K for image→text and text→image retrieval on a dataloader.
+
+    This follows the CLIP evaluation protocol:
+    - Encode all images and (cached) text embeddings
+    - Build cosine similarities
+    - For each image, rank all texts and compute Recall@K (image→text)
+    - For each text, rank all images and compute Recall@K (text→image)
+    """
+    model.eval()
+
+    image_embeddings_list = []
+    text_embeddings_list = []
+
+    with torch.no_grad():
+        for images, text_embeddings, image_ids in tqdm(dataloader, desc="Eval (embeddings)", leave=False, ncols=100):
+            images = images.to(device)
+            text_embeddings = text_embeddings.to(device)
+
+            # Ensure L2 normalization for text embeddings
+            text_embeddings = F.normalize(text_embeddings, p=2, dim=1)
+
+            img_emb = model.encode_image(images)
+
+            image_embeddings_list.append(img_emb.cpu())
+            text_embeddings_list.append(text_embeddings.cpu())
+
+    if not image_embeddings_list:
+        print("⚠ Recall@K evaluation skipped: no batches in dataloader.")
+        return None
+
+    # Stack all embeddings
+    image_embeddings = torch.cat(image_embeddings_list, dim=0)
+    text_embeddings = torch.cat(text_embeddings_list, dim=0)
+
+    # Final safety normalization (in case anything upstream changes)
+    image_embeddings = F.normalize(image_embeddings, p=2, dim=1)
+    text_embeddings = F.normalize(text_embeddings, p=2, dim=1)
+
+    num_samples = image_embeddings.size(0)
+    ks = sorted(ks)
+    max_k = ks[-1]
+
+    # Move to evaluation device for similarity computation
+    image_embeddings = image_embeddings.to(device)
+    text_embeddings = text_embeddings.to(device)
+    labels = torch.arange(num_samples, device=device)
+
+    # Containers for hit counts
+    hits_i2t = {k: 0 for k in ks}
+    hits_t2i = {k: 0 for k in ks}
+
+    # Batch over queries to avoid building a full NxN similarity matrix in memory
+    eval_batch_size = min(512, num_samples)
+
+    # Image-to-Text retrieval
+    for start in range(0, num_samples, eval_batch_size):
+        end = min(start + eval_batch_size, num_samples)
+        img_batch = image_embeddings[start:end]  # [B, D]
+
+        # Similarity to all texts: [B, N]
+        sims_i2t = img_batch @ text_embeddings.t()
+
+        topk_indices = sims_i2t.topk(max_k, dim=1).indices  # [B, max_k]
+        target = labels[start:end].unsqueeze(1)  # [B, 1]
+
+        for k in ks:
+            hits = (topk_indices[:, :k] == target).any(dim=1).sum().item()
+            hits_i2t[k] += hits
+
+    # Text-to-Image retrieval
+    for start in range(0, num_samples, eval_batch_size):
+        end = min(start + eval_batch_size, num_samples)
+        txt_batch = text_embeddings[start:end]  # [B, D]
+
+        sims_t2i = txt_batch @ image_embeddings.t()
+
+        topk_indices = sims_t2i.topk(max_k, dim=1).indices  # [B, max_k]
+        target = labels[start:end].unsqueeze(1)  # [B, 1]
+
+        for k in ks:
+            hits = (topk_indices[:, :k] == target).any(dim=1).sum().item()
+            hits_t2i[k] += hits
+
+    # Convert hit counts to Recall@K
+    recall_i2t = {k: hits_i2t[k] / num_samples for k in ks}
+    recall_t2i = {k: hits_t2i[k] / num_samples for k in ks}
+
+    print("\n" + "=" * 70)
+    print("Retrieval Evaluation (Validation Set)")
+    print("=" * 70)
+    for k in ks:
+        print(f"Image→Text Recall@{k}: {recall_i2t[k]*100:.2f}%")
+    for k in ks:
+        print(f"Text→Image Recall@{k}: {recall_t2i[k]*100:.2f}%")
+    print("=" * 70 + "\n")
+
+    return {
+        "i2t": recall_i2t,
+        "t2i": recall_t2i,
+        "num_samples": num_samples,
+    }
 
 def plot_loss_curves(train_losses, val_losses, temperatures, save_path):
     """
@@ -980,6 +1095,12 @@ def main():
                 train_losses, val_losses, temperatures, total_time, gpu_info, args, issues,
                 gradient_stats=gradient_stats if args.log_gradients else None
             )
+
+            # Compute retrieval metrics (Recall@K) on validation set with final model
+            try:
+                compute_recall_at_k(model, val_loader, device, ks=(1, 5, 10))
+            except Exception as e:
+                print(f"\n⚠ Failed to compute Recall@K on validation set: {e}")
         
         print("\n✓ Training complete!")
 

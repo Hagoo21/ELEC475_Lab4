@@ -10,6 +10,8 @@ from collections import Counter
 from statistics import mean, median
 from PIL import Image
 import sys
+import random
+import matplotlib.pyplot as plt
 
 # Add project root to path to import config
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -165,6 +167,104 @@ def print_caption_stats(caption_stats, split_name):
         print(f"  '{word}': {count}")
 
 
+def display_random_samples(captions_path, images_dir, num_samples=3):
+    """Display random image-caption pairs to verify dataset integrity"""
+    if not os.path.exists(captions_path):
+        print(f"\nCaption file not found: {captions_path}")
+        return
+    
+    with open(captions_path, 'r') as f:
+        data = json.load(f)
+    
+    annotations = data.get('annotations', [])
+    images_info = {img['id']: img for img in data.get('images', [])}
+    
+    # Get random samples
+    random_anns = random.sample(annotations, min(num_samples, len(annotations)))
+    
+    print(f"\n{'='*60}")
+    print(f"RANDOM IMAGE-CAPTION PAIRS (Dataset Integrity Check)")
+    print(f"{'='*60}")
+    
+    for i, ann in enumerate(random_anns, 1):
+        image_info = images_info.get(ann['image_id'])
+        if image_info:
+            image_path = os.path.join(images_dir, image_info['file_name'])
+            print(f"\nSample {i}:")
+            print(f"  Image: {image_info['file_name']}")
+            print(f"  Caption: {ann['caption']}")
+            
+            # Verify image exists
+            if os.path.exists(image_path):
+                try:
+                    with Image.open(image_path) as img:
+                        print(f"  Image Size: {img.size[0]}x{img.size[1]}")
+                        print(f"  ✓ Image verified")
+                except Exception as e:
+                    print(f"  ✗ Error loading image: {e}")
+            else:
+                print(f"  ✗ Image file not found!")
+
+
+def analyze_category_distribution(captions_path):
+    """Analyze and display distribution of images per category/label"""
+    if not os.path.exists(captions_path):
+        return None
+    
+    with open(captions_path, 'r') as f:
+        data = json.load(f)
+    
+    # Get categories
+    categories = {cat['id']: cat['name'] for cat in data.get('categories', [])}
+    
+    # Count images per category
+    category_counts = Counter()
+    for ann in data.get('annotations', []):
+        if 'category_id' in ann:
+            category_counts[ann['category_id']] += 1
+    
+    return {
+        'categories': categories,
+        'category_counts': category_counts
+    }
+
+
+def print_category_distribution(cat_data, split_name):
+    """Print category distribution statistics"""
+    if cat_data is None:
+        print(f"\nNo category data available for {split_name}")
+        return
+    
+    categories = cat_data['categories']
+    category_counts = cat_data['category_counts']
+    
+    if not category_counts:
+        print(f"\nNo category annotations found for {split_name}")
+        return
+    
+    print(f"\n{'='*60}")
+    print(f"{split_name.upper()} - IMAGES PER CATEGORY DISTRIBUTION")
+    print(f"{'='*60}")
+    
+    print(f"\nTotal Categories: {len(categories)}")
+    print(f"Total Annotations: {sum(category_counts.values())}")
+    
+    # Show top 15 categories
+    print(f"\nTop 15 Categories by Number of Annotations:")
+    for cat_id, count in category_counts.most_common(15):
+        cat_name = categories.get(cat_id, f"Unknown_{cat_id}")
+        print(f"  {cat_name:30s}: {count:6d} annotations")
+    
+    # Show distribution stats
+    counts = list(category_counts.values())
+    if counts:
+        print(f"\nDistribution Statistics:")
+        print(f"  Min annotations per category: {min(counts)}")
+        print(f"  Max annotations per category: {max(counts)}")
+        print(f"  Mean: {mean(counts):.1f}")
+        print(f"  Median: {median(counts):.1f}")
+
+
 def main():
     """Main EDA function"""
     print("="*60)
@@ -209,6 +309,20 @@ def main():
     
     val_caption_stats = analyze_captions(VAL_CAPTIONS_PATH)
     print_caption_stats(val_caption_stats, "Validation")
+    
+    # Display random image-caption pairs for integrity verification
+    print(f"\nVerifying dataset integrity with random samples...")
+    random.seed(42)  # For reproducibility
+    display_random_samples(TRAIN_CAPTIONS_PATH, TRAIN_IMAGES_DIR, num_samples=3)
+    display_random_samples(VAL_CAPTIONS_PATH, VAL_IMAGES_DIR, num_samples=3)
+    
+    # Analyze category distribution
+    print(f"\nAnalyzing category distribution...")
+    train_cat_data = analyze_category_distribution(TRAIN_CAPTIONS_PATH)
+    print_category_distribution(train_cat_data, "Train")
+    
+    val_cat_data = analyze_category_distribution(VAL_CAPTIONS_PATH)
+    print_category_distribution(val_cat_data, "Validation")
     
     print(f"\n{'='*60}")
     print("EDA Complete!")

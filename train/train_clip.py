@@ -29,7 +29,7 @@ from tqdm import tqdm
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
-from models.clip_model import create_clip_model
+from models.clip_model_modified import create_modified_clip_model as create_clip_model
 from datasets.dataloader import COCOCLIPDataset
 
 

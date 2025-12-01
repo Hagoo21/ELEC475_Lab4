@@ -107,14 +107,9 @@ class COCOCLIPDataset(Dataset):
             )
 
     def _default_transform(self):
-        """CLIP preprocessing pipeline for images."""
-        return transforms.Compose(
-            [
-                transforms.Resize((config.CLIP_IMAGE_SIZE, config.CLIP_IMAGE_SIZE)),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=config.CLIP_MEAN, std=config.CLIP_STD),
-            ]
-        )
+        """CLIP preprocessing pipeline for images with augmentation."""
+        from datasets.augmentation import get_augmentation_transforms
+        return get_augmentation_transforms("advanced_aug")
 
     def __len__(self):
         return len(self.images)

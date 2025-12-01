@@ -171,7 +171,8 @@ def train_epoch(model, dataloader, criterion, optimizer, device, epoch, num_epoc
             loss.backward()
             
             # Compute gradient norms before clipping (for monitoring)
-            all_params = list(model.parameters()) + [criterion.log_temperature]
+            # Include the learnable logit_scale parameter from InfoNCELoss
+            all_params = list(model.parameters()) + [criterion.logit_scale]
             total_grad_norm = torch.nn.utils.clip_grad_norm_(all_params, max_norm=float('inf'))
             
             # Gradient clipping for stability (includes temperature parameter)
@@ -938,12 +939,12 @@ def main():
         print(f"\n❌ Error creating model: {e}")
         sys.exit(1)
     
-    # Create loss function with learnable temperature
+    # Create loss function with learnable temperature (via logit_scale)
     criterion = InfoNCELoss(init_temperature=args.init_temperature).to(device)
     print(f"\n✓ Created InfoNCE loss with initial temperature: {args.init_temperature}")
     
-    # Create optimizer (only optimize trainable parameters + temperature)
-    trainable_params = list(model.get_trainable_parameters()) + [criterion.log_temperature]
+    # Create optimizer (only optimize trainable parameters + logit_scale)
+    trainable_params = list(model.get_trainable_parameters()) + [criterion.logit_scale]
     optimizer = torch.optim.AdamW(
         trainable_params,
         lr=args.lr,

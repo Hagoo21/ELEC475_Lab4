@@ -29,7 +29,7 @@ from tqdm import tqdm
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
-from models.clip_model_modified import create_modified_clip_model as create_clip_model
+from models.clip_model import create_clip_model
 from datasets.dataloader import COCOCLIPDataset
 
 
@@ -595,6 +595,7 @@ def main():
     parser.add_argument('--save_every', type=int, default=1, help='Save checkpoint every N epochs (default: 1)')
     parser.add_argument('--save_optimizer', action='store_true', help='Save optimizer state in checkpoints (increases file size ~3x)')
     parser.add_argument('--no_pin_memory', action='store_true', help='Disable pin_memory (useful for smaller GPUs)')
+    parser.add_argument('--modified', action='store_true', help='Use modified model (LayerNorm + augmentation)')
     
     args = parser.parse_args()
     
@@ -687,15 +688,27 @@ def main():
     # Create datasets
     print("\nCreating datasets...")
     try:
+        # Apply data augmentation if using modified model
+        if args.modified:
+            from datasets.augmentation import get_augmentation_transforms, get_validation_transforms
+            train_transform = get_augmentation_transforms("advanced_aug")
+            val_transform = get_validation_transforms()
+            print("✓ Using advanced data augmentation for training")
+        else:
+            train_transform = None
+            val_transform = None
+        
         train_dataset = COCOCLIPDataset(
             images_dir=config.TRAIN_IMAGES_DIR,
             captions_path=config.TRAIN_CAPTIONS_PATH,
-            text_embeddings=config.TRAIN_EMBEDDINGS_PATH
+            text_embeddings=config.TRAIN_EMBEDDINGS_PATH,
+            transform=train_transform
         )
         val_dataset = COCOCLIPDataset(
             images_dir=config.VAL_IMAGES_DIR,
             captions_path=config.VAL_CAPTIONS_PATH,
-            text_embeddings=config.VAL_EMBEDDINGS_PATH
+            text_embeddings=config.VAL_EMBEDDINGS_PATH,
+            transform=val_transform
         )
         print(f"✓ Train dataset: {len(train_dataset)} samples")
         print(f"✓ Val dataset: {len(val_dataset)} samples")
@@ -799,7 +812,13 @@ def main():
     print("\nCreating CLIP model...")
     print("Note: Text encoder will be skipped to save GPU memory (using cached embeddings)")
     try:
-        model = create_clip_model(device=device, use_cached_embeddings=True)
+        if args.modified:
+            print("🚀 Using MODIFIED model (LayerNorm + data augmentation)")
+            from models.clip_model_modified import create_modified_clip_model
+            model = create_modified_clip_model(device=device, use_cached_embeddings=True)
+        else:
+            print("Using BASELINE model")
+            model = create_clip_model(device=device, use_cached_embeddings=True)
     except Exception as e:
         print(f"\n❌ Error creating model: {e}")
         sys.exit(1)

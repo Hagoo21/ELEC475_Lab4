@@ -25,6 +25,8 @@ from torch.utils.data import DataLoader, Subset
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
+import csv
+from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -99,6 +101,13 @@ class InfoNCELoss(nn.Module):
         # Cosine similarity matrix (embeddings are normalized)
         # Shape: [batch_size, batch_size], logits[i, j] = similarity(img_i, txt_j)
         logits = torch.matmul(image_embeddings, text_embeddings.t())
+
+        # Clamp temperature range to avoid collapse (τ in [0.03, 0.2])
+        # This clamps logit_scale to [ln(1/0.2), ln(1/0.03)]
+        with torch.no_grad():
+            min_ls = torch.log(torch.tensor(1.0/0.2, device=logits.device))
+            max_ls = torch.log(torch.tensor(1.0/0.03, device=logits.device))
+            self.logit_scale.data.clamp_(min=min_ls, max=max_ls)
 
         # CLIP-style scaling: logits = cosine_similarity * exp(logit_scale)
         logits = logits * self.scale
@@ -391,6 +400,65 @@ def compute_recall_at_k(model, dataloader, device, ks=(1, 5, 10)):
         "t2i": recall_t2i,
         "num_samples": num_samples,
     }
+
+def save_recall_results(results, save_path_csv, save_path_txt):
+    """
+    Save Recall@K results to CSV and text file.
+    """
+    try:
+        os.makedirs(os.path.dirname(save_path_csv), exist_ok=True)
+    except Exception:
+        pass
+
+    # CSV
+    with open(save_path_csv, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(["Metric", "K", "Value", "NumSamples"])
+        for k, v in results["i2t"].items():
+            writer.writerow(["Image->Text", k, f"{v:.6f}", results["num_samples"]])
+        for k, v in results["t2i"].items():
+            writer.writerow(["Text->Image", k, f"{v:.6f}", results["num_samples"]])
+
+    # TXT
+    with open(save_path_txt, 'w', encoding='utf-8') as f:
+        f.write("Retrieval Evaluation (Validation Set)\n")
+        f.write(f"Num samples: {results['num_samples']}\n\n")
+        for k, v in results["i2t"].items():
+            f.write(f"Image→Text Recall@{k}: {v*100:.2f}%\n")
+        for k, v in results["t2i"].items():
+            f.write(f"Text→Image Recall@{k}: {v*100:.2f}%\n")
+
+def retrieve_top_images_for_text(model, dataloader, device, query_text_embedding, top_k=5):
+    """
+    Given a single text embedding, return top-k image ids from the dataloader dataset.
+    """
+    model.eval()
+    sims = []
+    with torch.no_grad():
+        q = F.normalize(query_text_embedding.to(device).view(1, -1), p=2, dim=1).t()  # [D,1]
+        for images, _text_embeds, image_ids in dataloader:
+            images = images.to(device)
+            img_emb = model.encode_image(images)                # [B, D]
+            img_emb = F.normalize(img_emb, p=2, dim=1)
+            s = img_emb @ q                                     # [B,1]
+            sims.append((s.squeeze(1).cpu(), torch.tensor(image_ids)))
+
+    scores = torch.cat([t for t, _ in sims], dim=0)
+    ids = torch.cat([i for _, i in sims], dim=0)
+    topk = scores.topk(top_k).indices.tolist()
+    return [ids[i].item() for i in topk]
+
+def best_text_for_image(model, device, image_tensor, class_text_embeddings):
+    """
+    Given an image and a list of class text embeddings, return best-matching class index.
+    """
+    model.eval()
+    with torch.no_grad():
+        img = image_tensor.unsqueeze(0).to(device)
+        img_emb = F.normalize(model.encode_image(img), p=2, dim=1)
+        txt = F.normalize(torch.stack(class_text_embeddings, dim=0).to(device), p=2, dim=1)
+        sims = (img_emb @ txt.t()).squeeze(0)
+        return sims.argmax().item()
 
 def plot_loss_curves(train_losses, val_losses, temperatures, save_path):
     """
@@ -711,7 +779,13 @@ def main():
     parser.add_argument('--save_every', type=int, default=1, help='Save checkpoint every N epochs (default: 1)')
     parser.add_argument('--save_optimizer', action='store_true', help='Save optimizer state in checkpoints (increases file size ~3x)')
     parser.add_argument('--no_pin_memory', action='store_true', help='Disable pin_memory (useful for smaller GPUs)')
-    parser.add_argument('--modified', action='store_true', help='Use modified model (LayerNorm + augmentation)')
+    parser.add_argument('--modified', action='store_true', help='Use modified model (v1)')
+    parser.add_argument('--modified2', action='store_true', help='Use modified model v2 (enhanced projection, dropout, unfreezing)')
+    parser.add_argument('--mod_config', type=str, default=None, help='Modified model configuration name (e.g., best_combo, best_combo_v2, unfreeze_1)')
+    parser.add_argument('--backbone_lr_scale', type=float, default=0.1, help='LR scale for backbone relative to base LR (only for modified models with param groups)')
+    parser.add_argument('--scheduler', type=str, choices=['none','cosine'], default='none', help='LR scheduler type')
+    parser.add_argument('--warmup_epochs', type=int, default=0, help='Warmup epochs for LR scheduler (when enabled)')
+    parser.add_argument('--early_stop_patience', type=int, default=0, help='Early stopping patience (epochs with no val improvement). 0 disables.')
     
     args = parser.parse_args()
     
@@ -928,10 +1002,16 @@ def main():
     print("\nCreating CLIP model...")
     print("Note: Text encoder will be skipped to save GPU memory (using cached embeddings)")
     try:
-        if args.modified:
-            print("🚀 Using MODIFIED model (LayerNorm + data augmentation)")
+        if args.modified2:
+            print("🚀 Using MODIFIED v2 model")
+            from models.clip_model_modified_2 import create_modified2_clip_model
+            cfg_name = args.mod_config or 'best_combo_v2'
+            model = create_modified2_clip_model(config_name=cfg_name, device=device, use_cached_embeddings=True)
+        elif args.modified:
+            print("🚀 Using MODIFIED v1 model")
             from models.clip_model_modified import create_modified_clip_model
-            model = create_modified_clip_model(device=device, use_cached_embeddings=True)
+            cfg_name = args.mod_config or 'layer_norm'
+            model = create_modified_clip_model(config_name=cfg_name, device=device, use_cached_embeddings=True)
         else:
             print("Using BASELINE model")
             model = create_clip_model(device=device, use_cached_embeddings=True)
@@ -943,14 +1023,33 @@ def main():
     criterion = InfoNCELoss(init_temperature=args.init_temperature).to(device)
     print(f"\n✓ Created InfoNCE loss with initial temperature: {args.init_temperature}")
     
-    # Create optimizer (only optimize trainable parameters + logit_scale)
-    trainable_params = list(model.get_trainable_parameters()) + [criterion.logit_scale]
-    optimizer = torch.optim.AdamW(
-        trainable_params,
-        lr=args.lr,
-        weight_decay=args.weight_decay
-    )
-    print(f"✓ Created AdamW optimizer (lr={args.lr}, weight_decay={args.weight_decay})")
+    # Create optimizer with differential LRs if model provides param groups
+    param_groups = None
+    if hasattr(model, 'get_param_groups'):
+        try:
+            param_groups = model.get_param_groups(args.lr, args.weight_decay, args.backbone_lr_scale)
+        except Exception:
+            param_groups = None
+    if param_groups is None:
+        param_groups = [{
+            'params': list(model.get_trainable_parameters()),
+            'lr': args.lr,
+            'weight_decay': args.weight_decay
+        }]
+    # Add temperature parameter group
+    param_groups.append({'params': [criterion.logit_scale], 'lr': args.lr, 'weight_decay': 0.0})
+    optimizer = torch.optim.AdamW(param_groups)
+    print(f"✓ Created AdamW optimizer with {len(param_groups)} param group(s)")
+
+    # Scheduler (optional)
+    scheduler = None
+    if args.scheduler == 'cosine':
+        if args.warmup_epochs > 0:
+            warmup = LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=args.warmup_epochs)
+            cosine = CosineAnnealingLR(optimizer, T_max=max(1, args.epochs - args.warmup_epochs))
+            scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[args.warmup_epochs])
+        else:
+            scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs)
     
     # Initialize training state
     start_epoch = 1
@@ -985,6 +1084,8 @@ def main():
         # Create overall progress bar for epochs
         epoch_pbar = tqdm(range(start_epoch, args.epochs + 1), desc="Training Progress", ncols=100)
         
+        best_epoch = start_epoch - 1
+        epochs_no_improve = 0
         for epoch in epoch_pbar:
             # Train
             train_loss, grad_stats = train_epoch(
@@ -1024,7 +1125,11 @@ def main():
             is_best = val_loss < best_val_loss
             if is_best:
                 best_val_loss = val_loss
+                best_epoch = epoch
                 epoch_pbar.write(f"  🎯 New best validation loss!")
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
             
             # Save checkpoint
             if epoch % args.save_every == 0 or is_best:
@@ -1033,6 +1138,13 @@ def main():
                     best_val_loss, config.CHECKPOINTS_DIR, is_best=is_best, 
                     save_optimizer=args.save_optimizer
                 )
+
+            # LR scheduler step (per-epoch)
+            if scheduler is not None:
+                try:
+                    scheduler.step()
+                except Exception:
+                    pass
             
             # Check for divergence
             if check_for_divergence(train_losses):
@@ -1056,6 +1168,11 @@ def main():
                     if issue_msg not in issues:
                         issues.append(issue_msg)
                         print(f"⚠ Note: {issue_msg}")
+
+            # Early stopping
+            if args.early_stop_patience > 0 and epochs_no_improve >= args.early_stop_patience:
+                print(f"\n⏹ Early stopping at epoch {epoch} (no val improvement for {epochs_no_improve} epochs; best at {best_epoch})")
+                break
     
     except KeyboardInterrupt:
         issues.append("Training interrupted by user")
@@ -1099,7 +1216,14 @@ def main():
 
             # Compute retrieval metrics (Recall@K) on validation set with final model
             try:
-                compute_recall_at_k(model, val_loader, device, ks=(1, 5, 10))
+                recall_results = compute_recall_at_k(model, val_loader, device, ks=(1, 5, 10))
+                if recall_results:
+                    save_recall_results(
+                        recall_results,
+                        os.path.join(config.TRAIN_DIR, 'recall_results.csv'),
+                        os.path.join(config.TRAIN_DIR, 'recall_results.txt')
+                    )
+                    print(f"✓ Saved Recall@K results to {os.path.join(config.TRAIN_DIR, 'recall_results.csv')}")
             except Exception as e:
                 print(f"\n⚠ Failed to compute Recall@K on validation set: {e}")
         

@@ -1,5 +1,9 @@
-   torch
-   torchvision
-   transformers
-   Pillow
-   kagglehub
+torch
+torchvision
+transformers
+Pillow
+kagglehub
+tqdm
+matplotlib
+numpy
+pycocotools

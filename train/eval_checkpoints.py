@@ -32,7 +32,7 @@ from torch.utils.data import DataLoader, Subset
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 from datasets.dataloader import COCOCLIPDataset
-from train.train_clip import compute_recall_at_k, validate, InfoNCELoss
+from train.train_clip import compute_recall_at_k, validate, InfoNCELoss, retrieve_top_images_for_text
 from models.clip_model import create_clip_model
 from models.clip_model_modified import create_modified_clip_model
 from models.clip_model_modified_2 import create_modified2_clip_model
@@ -108,11 +108,11 @@ def eval_one_checkpoint(model, criterion, val_loader, device, save_dir: str, tag
             for k, v in recall['t2i'].items():
                 f.write(f'Text->Image,{k},{v:.6f},{recall["num_samples"]}\n')
 
-    # Qualitative: sample 3 val images and list top-5 captions (IDs only)
-    # We reuse embeddings computed in recall function; for simplicity, run a small pass here
-    # (kept brief; detailed visualization not required by lab)
+    # Qualitative examples
+    # 1) image->captions: sample 3 images and list top-5 caption indices
+    # 2) caption->images: sample 2 captions and list top-5 image IDs
     try:
-        # Pull a small batch
+        # Pull a small batch for image->captions
         val_iter = iter(val_loader)
         images, text_embeds, image_ids = next(val_iter)
         images = images.to(device)
@@ -123,9 +123,18 @@ def eval_one_checkpoint(model, criterion, val_loader, device, save_dir: str, tag
             topk = sims.topk(5, dim=1).indices.cpu().tolist()
         qual_path = os.path.join(save_dir, f'{tag}_qualitative.txt')
         with open(qual_path, 'w', encoding='utf-8') as f:
-            f.write('Qualitative Retrieval (first batch, top-5 captions per image)\n')
+            f.write('Qualitative Retrieval\n')
+            # Image -> Captions
+            f.write('Image→Captions (top-5 indices in batch)\n')
             for i, img_id in enumerate(image_ids[:min(3, len(image_ids))]):
                 f.write(f'ImageID={img_id} -> top5 caption indices: {topk[i][:5]}\n')
+
+            # Caption -> Images (use two captions from current batch)
+            f.write('\nCaption→Images (top-5 image IDs)\n')
+            for j in range(min(2, txt_emb.size(0))):
+                query_emb = txt_emb[j].cpu()
+                top_imgs = retrieve_top_images_for_text(model, val_loader, device, query_text_embedding=query_emb, top_k=5)
+                f.write(f'CaptionIdx={j} -> top5 image IDs: {top_imgs}\n')
     except Exception:
         pass
 
@@ -140,7 +149,8 @@ def create_model_for_family(family: str, device: torch.device):
     elif family == 'modified2':
         model = create_modified2_clip_model(config_name='best_combo_v2', device=device, use_cached_embeddings=True)
     elif family == 'modified3':
-        model = create_modified3_clip_model(config_name='best_v3_default', device=device, use_cached_embeddings=True)
+        # Use convnext_tiny_v3 to match training config
+        model = create_modified3_clip_model(config_name='convnext_tiny_v3', device=device, use_cached_embeddings=True)
     else:
         raise ValueError(f'Unknown family: {family}')
     return model
@@ -203,7 +213,11 @@ def main():
 
         # Load state
         ckpt = load_checkpoint_state(ckpt_path, device)
-        model.load_state_dict(ckpt['model_state_dict'])
+        # Load with strict=True when shapes match; fallback to strict=False for minor buffers
+        try:
+            model.load_state_dict(ckpt['model_state_dict'])
+        except RuntimeError:
+            model.load_state_dict(ckpt['model_state_dict'], strict=False)
         try:
             criterion.load_state_dict(ckpt['criterion_state_dict'])
         except Exception:

@@ -1,5 +1,7 @@
-# Evaluate latest/best checkpoints for baseline (b_*), modified v1 (m_*), modified v2 (m2_*), and modified v3 (checkpoint*)
-python3 train/eval_checkpoints.py --device auto
+# Evaluation & Retrieval Commands Log
 
-# Optional: evaluate on a 20% subset of val for speed
-python3 train/eval_checkpoints.py --device auto --subset_percentage 20
+# Script to get test models against val images and get recall scores
+python3 train/eval_checkpoints.py --device auto --subset_percentage 5
+
+# Top Image Retrival test on 1% subset for baseline + modified3 
+python3 train/generate_caption_retrieval_pdf.py --caption "a dog playing in a park" --device auto --subset_percentage 1 --batch_size 16 --families baseline modified3

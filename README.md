@@ -4,6 +4,8 @@
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 pip install transformers
 pip install matplotlib
+pip install tqdm
+pip install Pillow
 should be all 
 
 

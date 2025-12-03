@@ -1,0 +1,5 @@
+# Evaluate latest/best checkpoints for baseline (b_*), modified v1 (m_*), modified v2 (m2_*), and modified v3 (checkpoint*)
+python3 train/eval_checkpoints.py --device auto
+
+# Optional: evaluate on a 20% subset of val for speed
+python3 train/eval_checkpoints.py --device auto --subset_percentage 20

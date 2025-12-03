@@ -781,6 +781,7 @@ def main():
     parser.add_argument('--no_pin_memory', action='store_true', help='Disable pin_memory (useful for smaller GPUs)')
     parser.add_argument('--modified', action='store_true', help='Use modified model (v1)')
     parser.add_argument('--modified2', action='store_true', help='Use modified model v2 (enhanced projection, dropout, unfreezing)')
+    parser.add_argument('--modified3', action='store_true', help='Use modified model v3 (backbone options, residual LN head, GeM)')
     parser.add_argument('--mod_config', type=str, default=None, help='Modified model configuration name (e.g., best_combo, best_combo_v2, unfreeze_1)')
     parser.add_argument('--backbone_lr_scale', type=float, default=0.1, help='LR scale for backbone relative to base LR (only for modified models with param groups)')
     parser.add_argument('--scheduler', type=str, choices=['none','cosine'], default='none', help='LR scheduler type')
@@ -1002,7 +1003,12 @@ def main():
     print("\nCreating CLIP model...")
     print("Note: Text encoder will be skipped to save GPU memory (using cached embeddings)")
     try:
-        if args.modified2:
+        if args.modified3:
+            print("🚀 Using MODIFIED v3 model")
+            from models.clip_model_modified_3 import create_modified3_clip_model
+            cfg_name = args.mod_config or 'best_v3_default'
+            model = create_modified3_clip_model(config_name=cfg_name, device=device, use_cached_embeddings=True)
+        elif args.modified2:
             print("🚀 Using MODIFIED v2 model")
             from models.clip_model_modified_2 import create_modified2_clip_model
             cfg_name = args.mod_config or 'best_combo_v2'

@@ -1,0 +1,11 @@
+# Baseline (20% of train)
+python train/train_clip.py --epochs 10 --batch_size 32 --train_percentage 20
+
+# Modified v1 (20% of train)
+python train/train_clip.py --epochs 10 --batch_size 32 --modified --mod_config layer_norm --train_percentage 20
+
+# Modified v2 (100% of train)
+python train/train_clip.py --epochs 10 --batch_size 32 --modified2 --mod_config best_combo_v2 --scheduler cosine --warmup_epochs 1 --backbone_lr_scale 0.1 --early_stop_patience 3 --lr 3e-4 --weight_decay 0.02
+
+# Modified v3 (ConvNeXt-Tiny, 20% of train)
+python train/train_clip.py --epochs 10 --batch_size 32 --modified3 --mod_config convnext_tiny_v3 --scheduler cosine --warmup_epochs 1 --backbone_lr_scale 0.2 --early_stop_patience 3 --lr 3e-4 --weight_decay 0.02 --train_percentage 20
